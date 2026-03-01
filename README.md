@@ -1,5 +1,5 @@
 # Astrometry.net java library
-This is a java library for plate solving astronomical images using the http://nova.astrometry.net/ web api. You can also checkout [my blog](https://astropetros.eu/code/2020/10/08/a-java-library-for-using-the-astrometry-net-online-services/) on this. 
+This is a java library for plate solving astronomical images using the http://nova.astrometry.net/ web api. You can also checkout [my blog](https://startales.eu/code/2020/10/08/a-java-library-for-using-the-astrometry-net-online-services/) on this. 
 
 ## Usage
 ```java
