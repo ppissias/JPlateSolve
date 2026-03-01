@@ -12,7 +12,7 @@ plugins {
 }
 
 task sourceJar(type: Jar) {
-    classifier 'sources'
+    archiveClassifier = 'sources'
     from sourceSets.main.allJava
 }
 
@@ -24,12 +24,23 @@ tasks.withType(JavaCompile) {
     options.encoding = 'UTF-8'
 }
 
+/*test {
+    testLogging {
+        // This forces Gradle to print standard out and error to the console
+        showStandardStreams = true
+
+        // Optional: Gives you more detail on exactly which test is running
+        events "passed", "skipped", "failed"
+        exceptionFormat "full"
+    }
+}*/
+
 dependencies {	
-	implementation 'gov.nasa.gsfc.heasarc:nom-tam-fits:1.15.2'
-	implementation 'com.google.code.gson:gson:2.8.6'
+	implementation 'gov.nasa.gsfc.heasarc:nom-tam-fits:1.21.2'
+	implementation 'com.google.code.gson:gson:2.13.2'
 	
     // Use JUnit test framework
-    testImplementation 'junit:junit:4.12'
+    testImplementation 'junit:junit:4.13.2'
 }
 
 

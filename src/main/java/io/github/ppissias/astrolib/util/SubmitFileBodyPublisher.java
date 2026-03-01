@@ -19,6 +19,11 @@ import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 
 import io.github.ppissias.astrolib.SubmitFileRequest;
 
@@ -31,6 +36,38 @@ import io.github.ppissias.astrolib.SubmitFileRequest;
  *
  */
 public class SubmitFileBodyPublisher {
+
+	/**
+	 * Suggestion from Gemini, in order to calculate the request header
+	 * @param boundary
+	 * @param json
+	 * @param file
+	 * @return
+	 * @throws IOException
+	 */
+	public static byte[] buildMultipartData(String boundary, String json, File file) throws IOException {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		String lineEnd = "\r\n";
+		String twoHyphens = "--";
+
+		// 1. Append the JSON part
+		baos.write((twoHyphens + boundary + lineEnd).getBytes(StandardCharsets.UTF_8));
+		baos.write(("Content-Disposition: form-data; name=\"request-json\"" + lineEnd + lineEnd).getBytes(StandardCharsets.UTF_8));
+		baos.write((json + lineEnd).getBytes(StandardCharsets.UTF_8));
+
+		// 2. Append the Image File part
+		baos.write((twoHyphens + boundary + lineEnd).getBytes(StandardCharsets.UTF_8));
+		baos.write(("Content-Disposition: form-data; name=\"file\"; filename=\"" + file.getName() + "\"" + lineEnd).getBytes(StandardCharsets.UTF_8));
+		baos.write(("Content-Type: application/octet-stream" + lineEnd + lineEnd).getBytes(StandardCharsets.UTF_8));
+		baos.write(Files.readAllBytes(file.toPath()));
+		baos.write((lineEnd).getBytes(StandardCharsets.UTF_8));
+
+		// 3. Append the Closing Boundary
+		baos.write((twoHyphens + boundary + twoHyphens + lineEnd).getBytes(StandardCharsets.UTF_8));
+
+		return baos.toByteArray();
+	}
+
 
 	public static BodyPublisher getBodyPublisher(File file, String submitFileJSON, String boundary) throws IOException {
 		//request raw bytes

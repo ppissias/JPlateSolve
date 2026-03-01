@@ -50,14 +50,14 @@ import nom.tam.util.Cursor;
 public class AstrometryDotNet {
 
 	//astrometry.net Service URIs
-	private static final String loginURI = "http://nova.astrometry.net/api/login";
-	private static final String submitFileURI = "http://nova.astrometry.net/api/upload";
-	private static final String submissionProgressURI = "http://nova.astrometry.net/api/submissions/";//+SUBID
-	private static final String jobProgressURI = "http://nova.astrometry.net/api/jobs/"; //+JOBID/info
-	private static final String wcsBaseURI = "http://nova.astrometry.net/wcs_file/"; //+JOBID
+	private static final String loginURI = "https://nova.astrometry.net/api/login";
+	private static final String submitFileURI = "https://nova.astrometry.net/api/upload";
+	private static final String submissionProgressURI = "https://nova.astrometry.net/api/submissions/";//+SUBID
+	private static final String jobProgressURI = "https://nova.astrometry.net/api/jobs/"; //+JOBID/info
+	private static final String wcsBaseURI = "https://nova.astrometry.net/wcs_file/"; //+JOBID
 	//links with info
 	private static final String annotategImageLink = "https://nova.astrometry.net/annotated_display/"; //+JOBID
-	private static final String resultsPageLink = "http://nova.astrometry.net/status/"; //+StatusID
+	private static final String resultsPageLink = "https://nova.astrometry.net/status/"; //+StatusID
 	
 	//Astrometry.net session ID, after logging
 	private String sessionID = null; 	
@@ -256,14 +256,19 @@ public class AstrometryDotNet {
 				String fileBlindSolveRequestJSON = gson.toJson(inputParameters);
 				
 				logger.fine("JSON parameter for blind solve request:"+fileBlindSolveRequestJSON);
-				
+
+				// Generate the byte array (this gives Java the exact size)
+				byte[] multipartBody = SubmitFileBodyPublisher.buildMultipartData(boundary, fileBlindSolveRequestJSON, imageFile);
+
 				//http POST request file upload and solve
 				HttpRequest request = HttpRequest.newBuilder()
-						.POST(SubmitFileBodyPublisher.getBodyPublisher(imageFile, fileBlindSolveRequestJSON, boundary))
+						//.POST(SubmitFileBodyPublisher.getBodyPublisher(imageFile, fileBlindSolveRequestJSON, boundary))
+						.POST(HttpRequest.BodyPublishers.ofByteArray(multipartBody))
 						.headers("Content-Type", "multipart/form-data;boundary=" + boundary)
 						.uri(URI.create(submitFileURI))				
 						.build();
-				
+
+
 				//make the http request and read the response
 				HttpResponse<String> response = client.send(request, BodyHandlers.ofString());
 				logger.fine("HTTP POST request to "+submitFileURI+" succesfully made");
