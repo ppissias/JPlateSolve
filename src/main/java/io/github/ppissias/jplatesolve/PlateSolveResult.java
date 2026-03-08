@@ -7,7 +7,7 @@
  * author: Petros Pissias <petrospis at gmail.com>
  *
  */
-package io.github.ppissias.astrolib;
+package io.github.ppissias.jplatesolve;
 
 import java.util.Map;
 

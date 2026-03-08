@@ -1,7 +1,7 @@
 /**
  * 
  */
-package io.github.ppissias.astrolib;
+package io.github.ppissias.jplatesolve;
 
 import javax.annotation.processing.Generated;
 
