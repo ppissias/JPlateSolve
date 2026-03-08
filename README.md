@@ -1,48 +1,126 @@
-# Astrometry.net java library
-This is a java library for plate solving astronomical images using the http://nova.astrometry.net/ web api. You can also checkout [my blog](https://startales.eu/code/2020/10/08/a-java-library-for-using-the-astrometry-net-online-services/) on this. 
+# 🌌 JPlateSolve
 
-## Usage
+**JPlateSolve** is a pure Java library for automated astrometric plate solving. It provides a unified, asynchronous API to determine the exact celestial coordinates (Right Ascension and Declination) of astronomical images.
+
+It serves as the plate-solving engine behind [SpacePixels](https://github.com/ppissias/SpacePixels) and is designed to be easily embedded into any Java-based astrophotography tool, observatory control software, or batch processing pipeline.
+
+## ✨ Key Features
+
+JPlateSolve supports two completely different backend engines, allowing you to choose between offline speed and online convenience:
+
+1. **Local Plate Solving (ASTAP):** Interfaces directly with a local installation of the blazing-fast [ASTAP (Astrometric STAcking Program)](https://www.hnsky.org/astap.htm) executable. Perfect for rapid, offline solving.
+2. **Cloud Plate Solving (Astrometry.net):** A fully featured Java wrapper for the [nova.astrometry.net](https://nova.astrometry.net/api_help) REST API. Supports both blind solving and custom solving with parameters.
+3. **Smart FITS Parsing:** Automatically reads `nom.tam.fits` headers (like `OBJCTRA` and `OBJCTDEC`) to extract focal length and coordinate hints, dramatically speeding up the solving process.
+4. **Fully Asynchronous:** All solving methods return Java `Future<PlateSolveResult>` objects, ensuring your application's UI thread is never blocked while waiting for a heavy solve to complete.
+
+## ⚠️ Prerequisites
+
+* **Java 21 or higher:** 
+* **For Local Solving:** You must have [ASTAP](https://www.hnsky.org/astap.htm) and its star databases (e.g., H18 or V17) installed on the host machine.
+* **For Cloud Solving:** [nova.astrometry.net](https://nova.astrometry.net/) will be used 
+
+## 🚀 Quick Start Guide
+
+### 1. Add to your project
+If you are using Gradle, include JPlateSolve in your dependencies:
+```groovy
+dependencies {
+   implementation 'io.github.ppissias:jplatesolve:1.0.0' // Replace with your actual version/path
+}
+```
+
+### 2. Example A: Local Solving via ASTAP
+ASTAP solving is lightning fast but requires the executable to be present on the local machine.
+
 ```java
-//blind solve
-File file = new File("...");
-Future<PlateSolveResult> solveResult = astrometryLib.blindSolve(file);
-PlateSolveResult result = solveResult.get(); //may take some minutes
-if (result.isSuccess()) {
-	System.out.println("Hurrayyy.."+result.getSolveInformation());
-} else {
-	System.out.println("Unfortunately astrometry.net could not solve your image");
-}		
+import io.github.ppissias.jplatesolve.PlateSolveResult;
+import io.github.ppissias.jplatesolve.astap.ASTAPInterface;
 
-//using custom parameters for solving the image
-SubmitFileRequest customSolveParameters = SubmitFileRequest.builder().withPublicly_visible("y").withScale_units("degwidth")
-		.withScale_lower(0.1f).withScale_upper(180.0f).withDownsample_factor(2f).withRadius(1.0f).build();
-Future<PlateSolveResult> solveResult = astrometryLib.customSolve(astronomicalFile, customSolveParameters);
-//if the file is a FITS file the OBJCTRA and OBJCTDEC information from the header will be used if not provided in the customSolveParameters object
-//...
+import java.io.File;
+import java.util.concurrent.Future;
+
+public class PlateSolverApp {
+   public void solveLocally() throws Exception {
+      File astapExe = new File("C:/Program Files/astap/astap.exe"); // Or /usr/bin/astap on Linux
+      String targetImage = "C:/AstroData/light_frame.fits";
+
+      System.out.println("Starting local solve...");
+
+      // This returns immediately so your UI doesn't freeze
+      Future<PlateSolveResult> futureResult = ASTAPInterface.solveImage(astapExe, targetImage);
+
+      // .get() will block until ASTAP finishes parsing the image
+      PlateSolveResult result = futureResult.get();
+
+      if (result.isSuccess()) {
+         System.out.println("Solve Successful!");
+         System.out.println("RA: " + result.getSolveInformation().get("ra"));
+         System.out.println("DEC: " + result.getSolveInformation().get("dec"));
+      } else {
+         System.out.println("Solve failed: " + result.getFailureReason());
+      }
+   }
+}
 ```
-Below you can see how the data is structured and returned through the ```PlateSolveResult.getSolveInformation()``` call
+
+### 3. Example B: Cloud Solving via Astrometry.net
+If the user doesn't have ASTAP, you can securely upload the image to the Astrometry.net cloud for blind solving.
+
 ```java
-Map<String, String> solveInformation = new HashMap<String, String>();
-solveInformation.put("source", "astrometry.net");
-solveInformation.put("original_response", gson.toJson(jobResResponse));
-solveInformation.put("annotated_image_link", annotategImageLink+jobID);
-solveInformation.put("status_page_link", resultsPageLink+submitFileResponse.getSubid());
-//all properties
+import io.github.ppissias.jplatesolve.PlateSolveResult;
+import io.github.ppissias.jplatesolve.astrometrydotnet.AstrometryDotNet;
 
-solveInformation.put("dec",""+jobResResponse.getCalibration().getDec());
-solveInformation.put("ra",""+jobResResponse.getCalibration().getRa());
-solveInformation.put("orientation",""+jobResResponse.getCalibration().getOrientation());
-solveInformation.put("pixscale",""+jobResResponse.getCalibration().getPixscale());
-solveInformation.put("radius",""+jobResResponse.getCalibration().getRadius());
-solveInformation.put("parity",""+jobResResponse.getCalibration().getParity());
-```
-## Download
+import java.io.File;
+import java.util.concurrent.Future;
 
-[Download latest release](https://github.com/ppissias/AstrometryNetLib/releases/download/v0.2/AstrometryNetLib.jar)
+public class CloudSolverApp {
+   public void solveInCloud() throws Exception {
+      File targetImage = new File("C:/AstroData/light_frame.fits");
 
-## Compiling
-You need to have Java 11 installed
+      AstrometryDotNet cloudSolver = new AstrometryDotNet();
+      // Note: Set your API key in the LoginRequest within the library
+      cloudSolver.login();
+
+      System.out.println("Uploading image and awaiting blind solve...");
+
+      // This fires off the upload and polling threads in the background
+      Future<PlateSolveResult> futureResult = cloudSolver.blindSolve(targetImage);
+
+      // .get() blocks until the remote job finishes (can take a few minutes)
+      PlateSolveResult result = futureResult.get();
+
+      if (result.isSuccess()) {
+         System.out.println("Cloud Solve Successful!");
+         System.out.println("Annotated Image URL: " + result.getSolveInformation().get("annotated_image_link"));
+         System.out.println("Orientation: " + result.getSolveInformation().get("orientation"));
+      } else {
+         System.out.println("Cloud solve failed: " + result.getFailureReason());
+      }
+   }
+}
 ```
-gradlew build -x test
-```
-and the resulting .jar library can be found in build/libraries
+
+## 🛠️ Building JPlateSolve from Source
+
+JPlateSolve uses [Gradle](https://gradle.org/) as its build system. To build the standalone `.jar` library yourself:
+
+1. Clone the repository:
+   ```bash
+   git clone [https://github.com/ppissias/jplatesolve.git](https://github.com/ppissias/jplatesolve.git)
+   cd jplatesolve
+   ```
+
+2. Build the project using the Gradle Wrapper:
+   ```bash
+   # On Linux/macOS
+   ./gradlew build
+   
+   # On Windows
+   gradlew.bat build
+   ```
+
+3. The compiled `.jar` file will be located in the `build/libs/` directory.
+
+## 📄 License
+
+MIT License (or your preferred license)

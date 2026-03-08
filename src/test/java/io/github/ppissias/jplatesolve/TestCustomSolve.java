@@ -19,6 +19,9 @@ import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import io.github.ppissias.jplatesolve.astrometrydotnet.AstrometryDotNet;
+import io.github.ppissias.jplatesolve.PlateSolveResult;
+import io.github.ppissias.jplatesolve.astrometrydotnet.SubmitFileRequest;
 import org.junit.Test;
 
 import nom.tam.fits.FitsException;

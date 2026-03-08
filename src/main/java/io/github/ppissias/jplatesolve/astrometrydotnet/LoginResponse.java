@@ -1,4 +1,4 @@
-package io.github.ppissias.jplatesolve;
+package io.github.ppissias.jplatesolve.astrometrydotnet;
 
 /*
  * SpacePixels

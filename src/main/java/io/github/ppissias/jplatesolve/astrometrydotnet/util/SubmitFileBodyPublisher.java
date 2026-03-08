@@ -7,7 +7,7 @@
  * author: Petros Pissias <petrospis at gmail.com>
  *
  */
-package io.github.ppissias.jplatesolve.util;
+package io.github.ppissias.jplatesolve.astrometrydotnet.util;
 
 import java.io.File;
 import java.io.IOException;

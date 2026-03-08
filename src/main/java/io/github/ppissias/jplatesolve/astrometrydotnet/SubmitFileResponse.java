@@ -7,7 +7,7 @@
  * author: Petros Pissias <petrospis at gmail.com>
  *
  */
-package io.github.ppissias.jplatesolve;
+package io.github.ppissias.jplatesolve.astrometrydotnet;
 
 /**
  * Documentation obtained from 

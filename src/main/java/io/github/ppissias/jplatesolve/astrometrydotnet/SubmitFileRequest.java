@@ -1,7 +1,7 @@
 /**
  * 
  */
-package io.github.ppissias.jplatesolve;
+package io.github.ppissias.jplatesolve.astrometrydotnet;
 
 import javax.annotation.processing.Generated;
 

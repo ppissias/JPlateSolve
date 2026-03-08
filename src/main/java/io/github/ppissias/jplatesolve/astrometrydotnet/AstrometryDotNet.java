@@ -7,7 +7,7 @@
  * author: Petros Pissias <petrospis at gmail.com>
  *
  */
-package io.github.ppissias.jplatesolve;
+package io.github.ppissias.jplatesolve.astrometrydotnet;
 
 import java.io.File;
 import java.io.IOException;
@@ -32,7 +32,8 @@ import java.util.logging.Logger;
 
 import com.google.gson.Gson;
 
-import io.github.ppissias.jplatesolve.util.SubmitFileBodyPublisher;
+import io.github.ppissias.jplatesolve.PlateSolveResult;
+import io.github.ppissias.jplatesolve.astrometrydotnet.util.SubmitFileBodyPublisher;
 import nom.tam.fits.Fits;
 import nom.tam.fits.FitsException;
 import nom.tam.fits.Header;
@@ -166,7 +167,6 @@ public class AstrometryDotNet {
 	 * Priority for the parameters is on the {@link SubmitFileRequest} parameter in case a paeameter
 	 * is also specified in the FITS header.
 	 * @param imageFile the file to be solved.
-	 * @param parameters the user parameters that influence the solve
 	 * @return a Future that can be used to obtain the solve result
 	 * @throws IOException 
 	 * @throws InterruptedException
