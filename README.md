@@ -25,7 +25,7 @@ JPlateSolve supports two completely different backend engines, allowing you to c
 If you are using Gradle, include JPlateSolve in your dependencies:
 ```groovy
 dependencies {
-   implementation 'io.github.ppissias:jplatesolve:1.0.0' // Replace with your actual version/path
+   implementation '...' // Coming soon ...
 }
 ```
 
@@ -78,7 +78,7 @@ public class CloudSolverApp {
       File targetImage = new File("C:/AstroData/light_frame.fits");
 
       AstrometryDotNet cloudSolver = new AstrometryDotNet();
-      // Note: Set your API key in the LoginRequest within the library
+      // Note: anonymous login
       cloudSolver.login();
 
       System.out.println("Uploading image and awaiting blind solve...");
