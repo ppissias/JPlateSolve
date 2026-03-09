@@ -3,7 +3,7 @@ package io.github.ppissias.jplatesolve.astrometrydotnet;
 /*
  * SpacePixels
  * 
- * Copyright (c)2020-2023, Petros Pissias.
+ * Copyright (c)2020-2026, Petros Pissias.
  * See the LICENSE file included in this distribution.
  *
  * author: Petros Pissias <petrospis at gmail.com>
