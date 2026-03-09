@@ -20,6 +20,10 @@ repositories {
     mavenCentral()
 }
 
+// Add your group and version here
+group = 'io.github.ppissias.jplatesolve'
+version = '1.0.0'
+
 tasks.withType(JavaCompile) {
     options.encoding = 'UTF-8'
 }
