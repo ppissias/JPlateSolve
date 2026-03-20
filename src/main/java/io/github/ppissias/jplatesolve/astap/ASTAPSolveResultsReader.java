@@ -10,16 +10,13 @@
 package io.github.ppissias.jplatesolve.astap;
 
 import io.github.ppissias.jplatesolve.PlateSolveResult;
-import org.apache.commons.configuration2.FileBasedConfiguration;
-import org.apache.commons.configuration2.PropertiesConfiguration;
-import org.apache.commons.configuration2.builder.FileBasedConfigurationBuilder;
-import org.apache.commons.configuration2.builder.fluent.Configurations;
-import org.apache.commons.configuration2.ex.ConfigurationException;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.HashMap;
-import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.logging.Logger;
 
@@ -42,7 +39,7 @@ public class ASTAPSolveResultsReader {
         this.fileBeingSolvedFullPath = fileBeingSolvedFullPath;
     }
 
-    public PlateSolveResult getSolveResult() throws ConfigurationException, IOException {
+    public PlateSolveResult getSolveResult() throws IOException {
 
         //determine .ini filename
         String iniFileName = getExpectedIniFilename(fileBeingSolvedFullPath);
@@ -57,31 +54,36 @@ public class ASTAPSolveResultsReader {
             }
         }
 
-        //read .ini file
-        Configurations configs = new Configurations();
-        FileBasedConfigurationBuilder<PropertiesConfiguration> iniFileConfigBuilder = configs.propertiesBuilder(iniFile);
-        FileBasedConfiguration iniFileConfig = iniFileConfigBuilder.getConfiguration();
+        //solve result (including all properties)
+        Map<String, String> solveResult = new HashMap<>();
+        
+        //read and parse .ini file natively
+        List<String> lines = Files.readAllLines(iniFile.toPath(), StandardCharsets.UTF_8);
+        for (String line : lines) {
+            if (line == null || line.trim().isEmpty() || line.trim().startsWith(";") || line.trim().startsWith("#") || line.trim().startsWith("[")) {
+                continue;
+            }
+            int separatorIndex = line.indexOf('=');
+            if (separatorIndex != -1) {
+                String key = line.substring(0, separatorIndex).trim();
+                String value = line.substring(separatorIndex + 1).trim();
+                solveResult.put(key, value);
+            }
+        }
 
         //basic results
-        String PLTSOLVD = iniFileConfig.getString("PLTSOLVD");
-        String WARNING = iniFileConfig.getString("WARNING");
+        String PLTSOLVD = solveResult.get("PLTSOLVD");
+        String WARNING = solveResult.get("WARNING");
 
-        //solve result (including all properties)
-        Map<String, String> solveResult = new HashMap<String, String>();
-        Iterator<String> keysIter = iniFileConfig.getKeys();
-        while (keysIter.hasNext()) {
-            String key = keysIter.next();
-            solveResult.put(key, iniFileConfig.getString(key));
-        }
         solveResult.put("source", "astap");
         //return results
-        if (PLTSOLVD.equals("T")) {
+        if ("T".equals(PLTSOLVD)) {
             solveResult.put("annotated_image_link", getExpectedAnnotatedFilename(fileBeingSolvedFullPath));
             solveResult.put("wcs_link", getExpectedWCSFilename(fileBeingSolvedFullPath));
 
             return new PlateSolveResult(true, null, WARNING, solveResult);
-        } else if (PLTSOLVD.equals("F")) {
-            String ERROR = iniFileConfig.getString("ERROR");
+        } else if ("F".equals(PLTSOLVD)) {
+            String ERROR = solveResult.get("ERROR");
             return new PlateSolveResult(false, ERROR, WARNING, solveResult);
         } else {
             throw new IOException("Unexpected value at ini file PLTSOLVD=" + PLTSOLVD);
