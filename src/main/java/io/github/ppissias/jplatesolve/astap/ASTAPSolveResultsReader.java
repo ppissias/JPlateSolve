@@ -15,6 +15,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -26,7 +27,11 @@ import java.util.logging.Logger;
  */
 public class ASTAPSolveResultsReader {
 
+    static final Duration DEFAULT_RESULT_TIMEOUT = Duration.ofMinutes(2);
+    private static final Duration FILE_POLL_INTERVAL = Duration.ofMillis(250);
+
     private final String fileBeingSolvedFullPath;
+    private final Duration resultTimeout;
 
     private final Logger logger = Logger.getLogger(ASTAPSolveResultsReader.class.getName());
 
@@ -35,8 +40,13 @@ public class ASTAPSolveResultsReader {
     }
 
     public ASTAPSolveResultsReader(String fileBeingSolvedFullPath) {
+        this(fileBeingSolvedFullPath, DEFAULT_RESULT_TIMEOUT);
+    }
+
+    public ASTAPSolveResultsReader(String fileBeingSolvedFullPath, Duration resultTimeout) {
         super();
         this.fileBeingSolvedFullPath = fileBeingSolvedFullPath;
+        this.resultTimeout = sanitizeTimeout(resultTimeout);
     }
 
     public PlateSolveResult getSolveResult() throws IOException {
@@ -46,11 +56,23 @@ public class ASTAPSolveResultsReader {
 
         //wait for file to be present
         File iniFile = new File(iniFileName);
+        long deadlineNanos = System.nanoTime() + resultTimeout.toNanos();
         while (!iniFile.exists()) {
+            if (Thread.currentThread().isInterrupted()) {
+                Thread.currentThread().interrupt();
+                throw new IOException("Interrupted while waiting for ASTAP results file: " + iniFileName);
+            }
+            if (System.nanoTime() >= deadlineNanos) {
+                throw new IOException("Timed out waiting for ASTAP results file after "
+                        + resultTimeout.toMillis() + " ms: " + iniFileName);
+            }
             try {
-                logger.info("Waiting for file to become available:" + iniFileName);
-                Thread.sleep(1000);
+                logger.fine("Waiting for file to become available:" + iniFileName);
+                long remainingMillis = Math.max(1L, Duration.ofNanos(Math.max(0L, deadlineNanos - System.nanoTime())).toMillis());
+                Thread.sleep(Math.min(FILE_POLL_INTERVAL.toMillis(), remainingMillis));
             } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("Interrupted while waiting for ASTAP results file: " + iniFileName, e);
             }
         }
 
@@ -122,5 +144,12 @@ public class ASTAPSolveResultsReader {
     private String getExpectedWCSFilename(String fitsFileName) {
         int lastSepPosition = fitsFileName.lastIndexOf(".");
         return fitsFileName.substring(0, lastSepPosition) + ".wcs";
+    }
+
+    private static Duration sanitizeTimeout(Duration timeout) {
+        if (timeout == null || timeout.isZero() || timeout.isNegative()) {
+            return DEFAULT_RESULT_TIMEOUT;
+        }
+        return timeout;
     }
 }

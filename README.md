@@ -25,7 +25,7 @@ JPlateSolve supports two completely different backend engines, allowing you to c
 If you are using Gradle, include JPlateSolve in your dependencies:
 ```groovy
 dependencies {
-   implementation '...' // Coming soon ...
+   implementation 'io.github.ppissias.jplatesolve:jplatesolve:1.0.0'
 }
 ```
 
@@ -46,7 +46,7 @@ public class PlateSolverApp {
 
       System.out.println("Starting local solve...");
 
-      // This returns immediately so your UI doesn't freeze
+      // This starts ASTAP in the background and returns an already-running Future
       Future<PlateSolveResult> futureResult = ASTAPInterface.solveImage(astapExe, targetImage);
 
       // .get() will block until ASTAP finishes parsing the image
@@ -77,24 +77,26 @@ public class CloudSolverApp {
    public void solveInCloud() throws Exception {
       File targetImage = new File("C:/AstroData/light_frame.fits");
 
-      AstrometryDotNet cloudSolver = new AstrometryDotNet();
-      // Note: anonymous login
-      cloudSolver.login();
+      try (AstrometryDotNet cloudSolver = new AstrometryDotNet()) {
+         // Uses the built-in guest API key by default.
+         // Pass your own key to new AstrometryDotNet("your-api-key") to override it.
+         cloudSolver.login();
 
-      System.out.println("Uploading image and awaiting blind solve...");
+         System.out.println("Uploading image and awaiting blind solve...");
 
-      // This fires off the upload and polling threads in the background
-      Future<PlateSolveResult> futureResult = cloudSolver.blindSolve(targetImage);
+         // This fires off the upload and polling threads in the background
+         Future<PlateSolveResult> futureResult = cloudSolver.blindSolve(targetImage);
 
-      // .get() blocks until the remote job finishes (can take a few minutes)
-      PlateSolveResult result = futureResult.get();
+         // .get() blocks until the remote job finishes (can take a few minutes)
+         PlateSolveResult result = futureResult.get();
 
-      if (result.isSuccess()) {
-         System.out.println("Cloud Solve Successful!");
-         System.out.println("Annotated Image URL: " + result.getSolveInformation().get("annotated_image_link"));
-         System.out.println("Orientation: " + result.getSolveInformation().get("orientation"));
-      } else {
-         System.out.println("Cloud solve failed: " + result.getFailureReason());
+         if (result.isSuccess()) {
+            System.out.println("Cloud Solve Successful!");
+            System.out.println("Annotated Image URL: " + result.getSolveInformation().get("annotated_image_link"));
+            System.out.println("Orientation: " + result.getSolveInformation().get("orientation"));
+         } else {
+            System.out.println("Cloud solve failed: " + result.getFailureReason());
+         }
       }
    }
 }
@@ -121,6 +123,45 @@ JPlateSolve uses [Gradle](https://gradle.org/) as its build system. To build the
 
 3. The compiled `.jar` file will be located in the `build/libs/` directory.
 
+4. Live Astrometry.net checks are separated from the default test task:
+   ```bash
+   ./gradlew integrationTest
+   ```
+
+## 📦 Publishing to Maven Central
+
+JPlateSolve is configured to generate a Maven Central-compatible publication with:
+
+* `javadoc.jar`
+* `sources.jar`
+* POM metadata
+* PGP signatures
+* checksum files
+
+Because the Central Portal does not currently provide an official Gradle publishing plugin, this build produces a signed upload bundle you can submit to the Portal manually.
+
+1. Create `gradle.properties` in the project root or `%USERPROFILE%\.gradle\gradle.properties`, then fill in your local values.
+
+2. Configure signing credentials. The simplest option is in-memory Gradle properties:
+   ```bash
+   export ORG_GRADLE_PROJECT_signingKey="..."
+   export ORG_GRADLE_PROJECT_signingPassword="..."
+   ```
+
+3. Build the signed Central bundle:
+   ```bash
+   ./gradlew clean mavenCentralBundle
+   ```
+
+4. Upload the generated file from:
+   ```text
+   build/distributions/jplatesolve-<version>-central-bundle.zip
+   ```
+
+Before uploading, make sure your `io.github.ppissias` namespace is verified in the Central Portal.
+
+The full standardized release workflow is documented in [PUBLISHING.md](PUBLISHING.md).
+
 ## 📄 License
 
-MIT License (or your preferred license)
+BSD 2-Clause License

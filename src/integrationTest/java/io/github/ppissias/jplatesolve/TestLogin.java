@@ -10,8 +10,6 @@
 package io.github.ppissias.jplatesolve;
 
 import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
 
 import java.io.IOException;
 import java.util.logging.Handler;
@@ -24,10 +22,9 @@ import org.junit.Test;
 
 public class TestLogin {
 
-	@Test public void testLogin() throws IOException, InterruptedException {	
-		//just have logging for our own classes
+	@Test public void testLogin() throws IOException, InterruptedException {
 		Logger logger = Logger.getLogger(AstrometryDotNet.class.getName());
-		logger.setLevel(Level.FINEST);		
+		logger.setLevel(Level.FINEST);
 		for (Handler handler :logger.getHandlers()) {
 			handler.setLevel(Level.FINEST);
 		}
@@ -37,12 +34,11 @@ public class TestLogin {
 		}
 		Logger.getLogger("jdk").setLevel(Level.WARNING);
 		Logger.getLogger("com").setLevel(Level.WARNING);
-		
-		AstrometryDotNet astrometryLib = new AstrometryDotNet();
-		astrometryLib.login(); 
-		assertNotNull("Received session id", astrometryLib.getSessionID());
-		System.out.println("Logged in with session id:"+astrometryLib.getSessionID());
+
+		try (AstrometryDotNet astrometryLib = new AstrometryDotNet()) {
+			astrometryLib.login();
+			assertNotNull("Received session id", astrometryLib.getSessionID());
+			System.out.println("Logged in with session id:"+astrometryLib.getSessionID());
+		}
 	}
-	
-	
 }
