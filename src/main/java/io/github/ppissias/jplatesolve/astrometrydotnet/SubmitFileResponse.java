@@ -10,9 +10,10 @@
 package io.github.ppissias.jplatesolve.astrometrydotnet;
 
 /**
- * Documentation obtained from 
- * http://astrometry.net/doc/net/api.html
- *
+ * Response returned immediately after an Astrometry.net file upload.
+ * <p>
+ * The submission identifier is later used to poll for job creation and solve
+ * progress.
  */
 public class SubmitFileResponse {
 

@@ -39,10 +39,12 @@ import java.util.concurrent.Future;
 import java.util.logging.Logger;
 
 /**
- * main class interfacing the astrometry.net services
- *
- * @author Petros Pissias
- *
+ * Client for the Astrometry.net HTTP API.
+ * <p>
+ * The client logs in lazily, uploads images for solving, polls the remote job
+ * until completion, and converts the remote response into a
+ * {@link PlateSolveResult}. Unless configured otherwise, it uses the built-in
+ * guest API key and an internally managed executor service.
  */
 public class AstrometryDotNet implements AutoCloseable {
 
@@ -56,6 +58,9 @@ public class AstrometryDotNet implements AutoCloseable {
     private static final String ANNOTATED_IMAGE_LINK = "https://nova.astrometry.net/annotated_display/"; //+JOBID
     private static final String RESULTS_PAGE_LINK = "https://nova.astrometry.net/status/"; //+StatusID
 
+    /**
+     * Default guest API key used when no explicit API key is configured.
+     */
     public static final String DEFAULT_API_KEY = "XXXXXXXX";
     private static final Duration DEFAULT_REQUEST_TIMEOUT = Duration.ofSeconds(60);
     private static final Duration DEFAULT_SOLVE_TIMEOUT = Duration.ofMinutes(15);
@@ -136,18 +141,39 @@ public class AstrometryDotNet implements AutoCloseable {
         return this.sessionID;
     }
 
+    /**
+     * Returns the API key currently configured for this client.
+     *
+     * @return configured API key, or the default guest key when no explicit key
+     *         was supplied
+     */
     public String getApiKey() {
         return apiKey;
     }
 
+    /**
+     * Returns the timeout applied to individual HTTP requests.
+     *
+     * @return per-request timeout
+     */
     public Duration getRequestTimeout() {
         return requestTimeout;
     }
 
+    /**
+     * Returns the total timeout for a remote solve operation.
+     *
+     * @return overall solve timeout
+     */
     public Duration getSolveTimeout() {
         return solveTimeout;
     }
 
+    /**
+     * Returns the poll interval used while waiting for submission and job status.
+     *
+     * @return polling interval between Astrometry.net status checks
+     */
     public Duration getPollInterval() {
         return pollInterval;
     }
@@ -188,12 +214,16 @@ public class AstrometryDotNet implements AutoCloseable {
 
 
     /**
-     * Makes a blind solve request to Astrometry.net
-     * It will login if the user has not yet logged in. The result may take up to 5-10 minutes
-     * depending on how busy astrometry.net currently is. It will upload the provided file
-     * and return a Future that will eventually have the {@link PlateSolveResult}
-     * @param imageFile the image file
-     * @return a Future that can be used to obtain the solve result
+     * Uploads an image for a blind solve using default Astrometry.net submission
+     * options.
+     * <p>
+     * If the client has not logged in yet, login happens automatically before the
+     * task is submitted. The returned future resolves to a failed
+     * {@link PlateSolveResult} for remote errors and solve timeouts; only pre-submit
+     * failures such as login errors are thrown directly from this method.
+     *
+     * @param imageFile the image file to solve
+     * @return a future for the eventual solve result
      * @throws IOException if login fails before the solve task is submitted
      * @throws InterruptedException if login is interrupted before the solve task is submitted
      */
@@ -211,16 +241,16 @@ public class AstrometryDotNet implements AutoCloseable {
 
 
     /**
-     * Makes a "custom" solve of the image. A custom solve allows the user
-     * to specify any number of parameters he wants that will influence the processing of the image.
-     * All user parameters are provided in the {@link SubmitFileRequest} parameter.
-     * These are the parameters from astrometry.net.
-     * If the image is a FITS file then the following properties from the header will be read and provided.
-     * Priority for the parameters is on the {@link SubmitFileRequest} parameter in case a paeameter
-     * is also specified in the FITS header.
-     * @param imageFile the file to be solved.
+     * Uploads an image for solving with caller-provided Astrometry.net parameters.
+     * <p>
+     * If the request does not already contain a session, the client logs in and
+     * injects one automatically. For FITS files, missing center coordinates may be
+     * populated from the primary header. Explicit values already present in
+     * {@code inputParameters} take precedence over FITS metadata.
+     *
+     * @param imageFile the file to solve
      * @param inputParameters request parameters to send to Astrometry.net
-     * @return a Future that can be used to obtain the solve result
+     * @return a future for the eventual solve result
      * @throws IOException if login or FITS parsing fails before the solve task is submitted
      * @throws InterruptedException if login is interrupted before the solve task is submitted
      * @throws FitsException if FITS metadata parsing fails
@@ -254,6 +284,12 @@ public class AstrometryDotNet implements AutoCloseable {
         return executor.submit(() -> performSolve(imageFile, updatedParameters));
     }
 
+    /**
+     * Shuts down the internally created executor, if this instance owns it.
+     * <p>
+     * Callers that supply their own executor through
+     * {@link AstrometryDotNetConfig} remain responsible for its lifecycle.
+     */
     @Override
     public void close() {
         if (ownsExecutor) {

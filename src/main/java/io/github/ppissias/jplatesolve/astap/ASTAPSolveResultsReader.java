@@ -22,8 +22,12 @@ import java.util.Map;
 import java.util.logging.Logger;
 
 /**
- * Helper class to read ASTAP plate solve results
- *
+ * Reads ASTAP output files for a previously started solve.
+ * <p>
+ * The reader waits for ASTAP's generated {@code .ini} file, parses its
+ * key/value pairs, and converts them into a {@link PlateSolveResult}. On a
+ * successful solve the returned metadata also includes the expected annotated
+ * image path and WCS file path.
  */
 public class ASTAPSolveResultsReader {
 
@@ -35,20 +39,45 @@ public class ASTAPSolveResultsReader {
 
     private final Logger logger = Logger.getLogger(ASTAPSolveResultsReader.class.getName());
 
+    /**
+     * Returns the image path this reader expects ASTAP to solve.
+     *
+     * @return full path of the source image
+     */
     public String getFileBeingSolved() {
         return fileBeingSolvedFullPath;
     }
 
+    /**
+     * Creates a reader using the default timeout for ASTAP result files.
+     *
+     * @param fileBeingSolvedFullPath full path of the source image
+     */
     public ASTAPSolveResultsReader(String fileBeingSolvedFullPath) {
         this(fileBeingSolvedFullPath, DEFAULT_RESULT_TIMEOUT);
     }
 
+    /**
+     * Creates a reader for ASTAP outputs associated with the provided image.
+     *
+     * @param fileBeingSolvedFullPath full path of the source image
+     * @param resultTimeout maximum time to wait for the generated {@code .ini}
+     *        file; non-positive values fall back to the default timeout
+     */
     public ASTAPSolveResultsReader(String fileBeingSolvedFullPath, Duration resultTimeout) {
         super();
         this.fileBeingSolvedFullPath = fileBeingSolvedFullPath;
         this.resultTimeout = sanitizeTimeout(resultTimeout);
     }
 
+    /**
+     * Waits for ASTAP's result file, parses it, and returns the corresponding
+     * plate-solve result.
+     *
+     * @return parsed solve result populated from the ASTAP {@code .ini} file
+     * @throws IOException if the result file cannot be found in time, cannot be
+     *         read, or contains unexpected content
+     */
     public PlateSolveResult getSolveResult() throws IOException {
 
         //determine .ini filename

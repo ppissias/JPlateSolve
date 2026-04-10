@@ -20,18 +20,43 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Logger;
 
 /**
- * Main ASTAP interface for plate solving.
- * Starts a background solve and returns a running future for the result.
+ * Entry point for running local plate solves through ASTAP.
+ * <p>
+ * The solve starts immediately on a daemon worker thread and the returned
+ * {@link Future} is already running when this method returns. Callers receive
+ * process-launch failures, timeout failures, and parse failures when resolving
+ * the future.
  */
 public class ASTAPInterface {
 
     private static final Logger LOGGER = Logger.getLogger(ASTAPInterface.class.getName());
     private static final AtomicInteger WORKER_COUNTER = new AtomicInteger();
 
+    /**
+     * Starts an ASTAP solve using the default result timeout.
+     *
+     * @param astapExecutable the ASTAP executable to launch
+     * @param imageFullPath absolute path to the image that should be solved
+     * @return a running future for the solve result
+     */
     public static Future<PlateSolveResult> solveImage(File astapExecutable, String imageFullPath) {
         return solveImage(astapExecutable, imageFullPath, ASTAPSolveResultsReader.DEFAULT_RESULT_TIMEOUT);
     }
 
+    /**
+     * Starts an ASTAP solve and waits for the generated result files for at most
+     * the provided timeout.
+     * <p>
+     * ASTAP is invoked in blind-solve mode and, on success, is expected to create
+     * an {@code .ini} file plus the usual annotated image and WCS outputs next to
+     * the source image.
+     *
+     * @param astapExecutable the ASTAP executable to launch
+     * @param imageFullPath absolute path to the image that should be solved
+     * @param resultTimeout maximum time to wait for ASTAP's result files; non-positive
+     *        values fall back to the default timeout
+     * @return a running future for the solve result
+     */
     public static Future<PlateSolveResult> solveImage(File astapExecutable, String imageFullPath, Duration resultTimeout) {
         FutureTask<PlateSolveResult> task = new FutureTask<>(() -> {
 

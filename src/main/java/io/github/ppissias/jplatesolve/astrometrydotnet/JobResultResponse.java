@@ -12,27 +12,15 @@ package io.github.ppissias.jplatesolve.astrometrydotnet;
 import java.util.Arrays;
 
 /**
- * Sample response
- * http://nova.astrometry.net/api/jobs/4612037/info
- * 
- * {"objects_in_field": [], "machine_tags": [], "tags": [], "status": "solving", "original_filename": "m101.jpg"}
- * 
- * {"objects_in_field": ["NGC 5485", "NGC 5474", "NGC 5473", "M 101", "NGC 5457", "NGC 5422"], 
- * "machine_tags": ["NGC 5485", "NGC 5474", "NGC 5473", "M 101", "NGC 5457", "NGC 5422"], 
- * "tags": ["NGC 5485", "NGC 5474", "NGC 5473", "M 101", "NGC 5457", "NGC 5422"], 
- * "status": "success", 
- * "original_filename": "m101.jpg", 
- * "calibration": {"ra": 210.93786157120064, "dec": 54.19992138054277, "radius": 1.3650107286511968, "pixscale": 3.404384121851302, "orientation": 90.0567419934768, "parity": 1.0}}
- * 
- * 
- * Sample failure response
- * http://nova.astrometry.net/api/jobs/2493117/info
- * {"objects_in_field": [], "machine_tags": [], "tags": [], "status": "failure", "original_filename": "convertedAstometry.fits"}
- * 
- * @author Petros Pissias
- *
+ * Solve status returned by Astrometry.net for a specific job.
+ * <p>
+ * A successful response may include a {@link JobResultResponseCalibration}
+ * block with the solved sky coordinates, image scale, and orientation.
  */
 public class JobResultResponse {
+	/**
+	 * Astrometric calibration details returned for a successfully solved job.
+	 */
 	public class JobResultResponseCalibration {
 		private float ra;
 		private float dec;

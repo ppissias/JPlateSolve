@@ -12,23 +12,12 @@ package io.github.ppissias.jplatesolve.astrometrydotnet;
 import java.util.Arrays;
 
 /**
- * Documentation from 
- * http://astrometry.net/doc/net/api.html
- * 
- * Sample response
- * http://nova.astrometry.net/api/submissions/3904409
- * {"user": 1000, "processing_started": "2020-10-05 09:59:34.799331", "processing_finished": "2020-10-05 09:59:35.033692", 
- * "user_images": [4046174], "images": [9302760], "jobs": [4612037], "job_calibrations": [[4612037, 3129343]]}
- * 
- * When you submit a URL or file, you will get back a subid submission identifier. You can use this to query the status of your submission as it gets queued and run. Each submission can have 0 or more jobs associated with it; a job corresponds to a run of the solve-field program on your data.
- * 
- * If the job has not started yet, the jobs array may be empty. If the job_calibrations array is not empty, then we solved your image.
- * 
- * progressive responses
- * {"user": 1, "processing_started": "None", "processing_finished": "None", "user_images": [], "images": [], "jobs": [], "job_calibrations": []}
- * 
- * @author Petros Pissias
- *
+ * Submission status returned by Astrometry.net while an upload is being queued
+ * or processed.
+ * <p>
+ * The important field for this library is {@link #getJobs()}, which becomes
+ * populated once Astrometry.net has created at least one solve job for the
+ * submission.
  */
 public class SubmissionProgressResponse {
 	private String user;

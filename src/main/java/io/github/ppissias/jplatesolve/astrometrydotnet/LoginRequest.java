@@ -12,9 +12,9 @@ package io.github.ppissias.jplatesolve.astrometrydotnet;
 import javax.annotation.processing.Generated;
 
 /**
- * Login request
- * @author Petros Pissias
- *
+ * Astrometry.net login payload.
+ * <p>
+ * This request only carries the API key used to obtain a session token.
  */
 public class LoginRequest {
 	private String apikey;

@@ -18,22 +18,23 @@ import java.nio.file.Files;
 import java.io.ByteArrayOutputStream;
 
 /**
- * Returns a BodyPublisher for the Submit File Request to 
- * Astrometry.net 
- * 
- * Thanks to https://github.com/ralscha/blog2019/blob/master/java11httpclient/client/src/main/java/ch/rasc/httpclient/File.java
- * for the example code
- *
+ * Utilities for building the multipart HTTP request body used by Astrometry.net
+ * file uploads.
  */
 public class SubmitFileBodyPublisher {
 
 	/**
-	 * Suggestion from Gemini, in order to calculate the request header
-	 * @param boundary
-	 * @param json
-	 * @param file
-	 * @return
-	 * @throws IOException
+	 * Builds the full multipart payload in memory.
+	 * <p>
+	 * This method is mainly useful for tests or diagnostics. Production upload
+	 * requests should prefer {@link #getBodyPublisher(File, String, String)} to
+	 * avoid buffering the whole file in memory.
+	 *
+	 * @param boundary multipart boundary
+	 * @param json Astrometry.net request-json payload
+	 * @param file image file to upload
+	 * @return raw multipart payload bytes
+	 * @throws IOException if the file cannot be read
 	 */
 	public static byte[] buildMultipartData(String boundary, String json, File file) throws IOException {
 		ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -59,6 +60,15 @@ public class SubmitFileBodyPublisher {
 	}
 
 
+	/**
+	 * Returns a streaming multipart body publisher for an Astrometry.net upload.
+	 *
+	 * @param file image file to upload
+	 * @param submitFileJSON Astrometry.net request-json payload
+	 * @param boundary multipart boundary
+	 * @return multipart body publisher suitable for {@link java.net.http.HttpRequest}
+	 * @throws IOException if the file cannot be accessed
+	 */
 	public static BodyPublisher getBodyPublisher(File file, String submitFileJSON, String boundary) throws IOException {
 		String lineEnd = "\r\n";
 		String jsonPart = "--" + boundary + lineEnd

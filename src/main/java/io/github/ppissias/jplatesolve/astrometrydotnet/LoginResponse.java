@@ -9,6 +9,12 @@ package io.github.ppissias.jplatesolve.astrometrydotnet;
  * author: Petros Pissias <petrospis at gmail.com>
  *
  */
+/**
+ * Response returned by Astrometry.net's login endpoint.
+ * <p>
+ * A successful response provides the session identifier used by subsequent
+ * upload requests.
+ */
 public class LoginResponse {
 	private String status;
 	private String message;	
