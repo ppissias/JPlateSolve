@@ -14,22 +14,6 @@ def githubRepoScmUrl = 'https://github.com/ppissias/JPlateSolve.git'
 def centralArtifactId = 'jplatesolve'
 def centralStagingRepository = layout.buildDirectory.dir('repos/central-staging')
 
-def requireGradleProperty = { String propertyName ->
-    def value = providers.gradleProperty(propertyName).orNull
-    if (value == null || value.trim().isEmpty()) {
-        throw new GradleException(
-                "Missing required Gradle property '${propertyName}'. " +
-                        "Set it in gradle.properties or %USERPROFILE%/.gradle/gradle.properties.")
-    }
-    value
-}
-
-def pomDeveloperId = requireGradleProperty('pomDeveloperId')
-def pomDeveloperName = requireGradleProperty('pomDeveloperName')
-def pomDeveloperEmail = requireGradleProperty('pomDeveloperEmail')
-def pomDeveloperOrganization = requireGradleProperty('pomDeveloperOrganization')
-def pomDeveloperOrganizationUrl = requireGradleProperty('pomDeveloperOrganizationUrl')
-
 def inMemorySigningKey = providers.gradleProperty('signingKey')
         .map { it.replace("\\n", "\n") }
         .orNull
@@ -41,7 +25,7 @@ def hasLegacySigning = findProperty('signing.keyId') != null &&
 def signingConfigured = hasInMemorySigning || hasLegacySigning
 
 group = 'io.github.ppissias.jplatesolve'
-version = '1.0.0'
+version = '1.0.1'
 description = 'Pure Java library for automated astrometric plate solving via ASTAP and Astrometry.net.'
 
 base {
@@ -123,11 +107,11 @@ publishing {
 
                 developers {
                     developer {
-                        id = pomDeveloperId
-                        name = pomDeveloperName
-                        email = pomDeveloperEmail
-                        organization = pomDeveloperOrganization
-                        organizationUrl = pomDeveloperOrganizationUrl
+                        id = providers.gradleProperty('pomDeveloperId')
+                        name = providers.gradleProperty('pomDeveloperName')
+                        email = providers.gradleProperty('pomDeveloperEmail')
+                        organization = providers.gradleProperty('pomDeveloperOrganization')
+                        organizationUrl = providers.gradleProperty('pomDeveloperOrganizationUrl')
                     }
                 }
 
@@ -169,6 +153,18 @@ tasks.register('validateCentralReleaseConfiguration') {
                             'Set ORG_GRADLE_PROJECT_signingKey and ORG_GRADLE_PROJECT_signingPassword, ' +
                             'or configure signing.keyId/signing.password/signing.secretKeyRingFile.')
         }
+
+        def checkNotBlank = { String propName ->
+            def prop = providers.gradleProperty(propName).orNull
+            if (prop == null || prop.trim().isEmpty()) {
+                throw new GradleException("Missing required Gradle property for publication: '${propName}'.")
+            }
+        }
+        checkNotBlank('pomDeveloperId')
+        checkNotBlank('pomDeveloperName')
+        checkNotBlank('pomDeveloperEmail')
+        checkNotBlank('pomDeveloperOrganization')
+        checkNotBlank('pomDeveloperOrganizationUrl')
     }
 }
 
