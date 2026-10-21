@@ -9,3 +9,6 @@ bin
 .project
 .classpath
 gradle.properties
+
+# IntelliJ IDEA project files
+.idea
