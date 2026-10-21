@@ -11,6 +11,9 @@ package io.github.ppissias.jplatesolve.astrometrydotnet;
 
 import com.google.gson.Gson;
 import io.github.ppissias.jplatesolve.PlateSolveResult;
+import io.github.ppissias.jplatesolve.PlateSolveOperation;
+import io.github.ppissias.jplatesolve.PlateSolveOperation.Context;
+import io.github.ppissias.jplatesolve.PlateSolveOperation.Phase;
 import io.github.ppissias.jplatesolve.astrometrydotnet.util.SubmitFileBodyPublisher;
 import nom.tam.fits.Fits;
 import nom.tam.fits.FitsException;
@@ -27,9 +30,17 @@ import java.net.http.HttpClient.Version;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.net.http.HttpResponse.BodyHandlers;
+import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Consumer;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -47,16 +58,17 @@ import java.util.logging.Logger;
  * guest API key and an internally managed executor service.
  */
 public class AstrometryDotNet implements AutoCloseable {
+    private static final AtomicInteger WORKERS = new AtomicInteger();
 
     //astrometry.net Service URIs
-    private static final String LOGIN_URI = "https://nova.astrometry.net/api/login";
-    private static final String SUBMIT_FILE_URI = "https://nova.astrometry.net/api/upload";
-    private static final String SUBMISSION_PROGRESS_URI = "https://nova.astrometry.net/api/submissions/";//+SUBID
-    private static final String JOB_PROGRESS_URI = "https://nova.astrometry.net/api/jobs/"; //+JOBID/info
-    private static final String WCS_BASE_URI = "https://nova.astrometry.net/wcs_file/"; //+JOBID
+    private static final String LOGIN_URI = "api/login";
+    private static final String SUBMIT_FILE_URI = "api/upload";
+    private static final String SUBMISSION_PROGRESS_URI = "api/submissions/";//+SUBID
+    private static final String JOB_PROGRESS_URI = "api/jobs/"; //+JOBID/info
+    private static final String WCS_BASE_URI = "wcs_file/"; //+JOBID
     //links with info
-    private static final String ANNOTATED_IMAGE_LINK = "https://nova.astrometry.net/annotated_display/"; //+JOBID
-    private static final String RESULTS_PAGE_LINK = "https://nova.astrometry.net/status/"; //+StatusID
+    private static final String ANNOTATED_IMAGE_LINK = "annotated_display/"; //+JOBID
+    private static final String RESULTS_PAGE_LINK = "status/"; //+StatusID
 
     /**
      * Default guest API key used when no explicit API key is configured.
@@ -67,7 +79,7 @@ public class AstrometryDotNet implements AutoCloseable {
     private static final Duration DEFAULT_POLL_INTERVAL = Duration.ofSeconds(5);
 
     //Astrometry.net session ID, after logging
-    private String sessionID = null;
+    private volatile String sessionID = null;
 
     //Gson object used for JSON transformations to java objects back and forth
     private final Gson gson;
@@ -85,6 +97,11 @@ public class AstrometryDotNet implements AutoCloseable {
     private final Duration requestTimeout;
     private final Duration solveTimeout;
     private final Duration pollInterval;
+    private final URI serviceBaseUri;
+    private final Object lifecycle = new Object();
+    private final Set<PlateSolveOperation> operations = new HashSet<>();
+    private final ReentrantLock loginLock = new ReentrantLock();
+    private volatile boolean closed;
 
     /**
      * Constructs a new client using the default guest Astrometry.net API key and
@@ -118,9 +135,21 @@ public class AstrometryDotNet implements AutoCloseable {
         this.solveTimeout = sanitizeDuration(effectiveConfig.getSolveTimeout(), DEFAULT_SOLVE_TIMEOUT);
         this.pollInterval = sanitizeDuration(effectiveConfig.getPollInterval(), DEFAULT_POLL_INTERVAL);
 
+        URI root = effectiveConfig.getServiceBaseUri() == null
+                ? URI.create("https://nova.astrometry.net/") : effectiveConfig.getServiceBaseUri();
+        if (!root.isAbsolute() || !("http".equals(root.getScheme()) || "https".equals(root.getScheme()))
+                || root.getHost() == null || root.getQuery() != null || root.getFragment() != null) {
+            throw new IllegalArgumentException("Service base URI must be an absolute HTTP(S) root without query or fragment.");
+        }
+        this.serviceBaseUri = URI.create(root.toString().endsWith("/") ? root.toString() : root + "/");
+
         ExecutorService configuredExecutor = effectiveConfig.getExecutorService();
         if (configuredExecutor == null) {
-            this.executor = Executors.newFixedThreadPool(3);
+            this.executor = Executors.newFixedThreadPool(3, action -> {
+                Thread thread = Executors.defaultThreadFactory().newThread(action);
+                thread.setName("jplatesolve-astrometry-" + WORKERS.incrementAndGet());
+                return thread;
+            });
             this.ownsExecutor = true;
         } else {
             this.executor = configuredExecutor;
@@ -137,7 +166,7 @@ public class AstrometryDotNet implements AutoCloseable {
      * Returns the session ID of this intance.
      * @return the active Astrometry.net session identifier, or null if not logged in
      */
-    public synchronized String getSessionID() {
+    public String getSessionID() {
         return this.sessionID;
     }
 
@@ -178,218 +207,167 @@ public class AstrometryDotNet implements AutoCloseable {
         return pollInterval;
     }
 
-    /**
-     * Logs in to astrometry.net and obtains a session ID
-     * @throws IOException if the login request fails
-     * @throws InterruptedException if the login request is interrupted
-     */
-    public synchronized void login() throws IOException, InterruptedException {
-        LoginRequest loginReq = LoginRequest.builder().withApikey(apiKey).build();
-
-        logger.fine("Sending Login request [JSON]:" + gson.toJson(loginReq));
-
-        var builder = new StringBuilder();
-        builder.append(URLEncoder.encode("request-json", StandardCharsets.UTF_8));
-        builder.append("=");
-        builder.append(URLEncoder.encode(gson.toJson(loginReq), StandardCharsets.UTF_8));
-
-        logger.fine("Formatted HTTP POST request:" + builder);
-
-        HttpRequest request = requestBuilder(LOGIN_URI)
-                .POST(HttpRequest.BodyPublishers.ofString(builder.toString()))
-                .headers("Content-Type", "application/x-www-form-urlencoded")
-                .build();
-
-        HttpResponse<String> response = sendRequest(request, LOGIN_URI);
-        LoginResponse loginResponse = gson.fromJson(response.body(), LoginResponse.class);
-        logger.fine("Transformed Login Response:" + loginResponse);
-
-        if (loginResponse == null || !"success".equals(loginResponse.getStatus())
-                || loginResponse.getSession() == null || loginResponse.getSession().isBlank()) {
-            throw new IOException("Astrometry.net login failed: " + response.body());
+    /** Logs in synchronously. New solves perform login inside their cancellable operation. */
+    public void login() throws IOException, InterruptedException {
+        loginLock.lockInterruptibly();
+        try {
+            if (closed) throw new IOException("Astrometry.net client is closed.");
+            login(null);
+        } finally {
+            loginLock.unlock();
         }
-
-        this.sessionID = loginResponse.getSession();
     }
 
+    private void login(Context context) throws IOException, InterruptedException {
+        LoginRequest parameters = LoginRequest.builder().withApikey(apiKey).build();
+        String body = "request-json=" + URLEncoder.encode(gson.toJson(parameters), StandardCharsets.UTF_8);
+        HttpRequest request = requestBuilder(LOGIN_URI, context)
+                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .header("Content-Type", "application/x-www-form-urlencoded").build();
+        HttpResponse<String> response = sendRequest(request, context);
+        LoginResponse result = gson.fromJson(response.body(), LoginResponse.class);
+        if (result == null || !"success".equals(result.getStatus())
+                || result.getSession() == null || result.getSession().isBlank()) {
+            throw new IOException("Astrometry.net login failed.");
+        }
+        sessionID = result.getSession();
+    }
 
-    /**
-     * Uploads an image for a blind solve using default Astrometry.net submission
-     * options.
-     * <p>
-     * If the client has not logged in yet, login happens automatically before the
-     * task is submitted. The returned future resolves to a failed
-     * {@link PlateSolveResult} for remote errors and solve timeouts; only pre-submit
-     * failures such as login errors are thrown directly from this method.
-     *
-     * @param imageFile the image file to solve
-     * @return a future for the eventual solve result
-     * @throws IOException if login fails before the solve task is submitted
-     * @throws InterruptedException if login is interrupted before the solve task is submitted
-     */
+    /** Legacy adapter. Login and FITS preparation now execute asynchronously as part of the solve. */
     public Future<PlateSolveResult> blindSolve(File imageFile) throws IOException, InterruptedException {
-        logger.fine("Will try to blind solve:" + imageFile.getAbsolutePath());
-        ensureLoggedIn();
-
-        SubmitFileRequest fileBlindSolveRequest = SubmitFileRequest.builder()
-                .withSession(sessionID)
-                .withPublicly_visible("y")
-                .build();
-
-        return executor.submit(() -> performSolve(imageFile, fileBlindSolveRequest));
+        return startBlindSolve(imageFile, null).asFuture(true);
     }
 
-
-    /**
-     * Uploads an image for solving with caller-provided Astrometry.net parameters.
-     * <p>
-     * If the request does not already contain a session, the client logs in and
-     * injects one automatically. For FITS files, missing center coordinates may be
-     * populated from the primary header. Explicit values already present in
-     * {@code inputParameters} take precedence over FITS metadata.
-     *
-     * @param imageFile the file to solve
-     * @param inputParameters request parameters to send to Astrometry.net
-     * @return a future for the eventual solve result
-     * @throws IOException if login or FITS parsing fails before the solve task is submitted
-     * @throws InterruptedException if login is interrupted before the solve task is submitted
-     * @throws FitsException if FITS metadata parsing fails
-     */
-    public Future<PlateSolveResult> customSolve(File imageFile, SubmitFileRequest inputParameters) throws IOException, InterruptedException, FitsException {
-        logger.fine("Will try to custom solve:" + imageFile.getAbsolutePath() + " with initial parameters" + inputParameters);
-        if (inputParameters.getSession() == null || inputParameters.getSession().isBlank()) {
-            ensureLoggedIn();
-            inputParameters.setSession(this.sessionID);
-        }
-
-        SubmitFileRequest updatedParameters;
-        if (isFitsFile(imageFile)) {
-            updatedParameters = updateFromFitsHeader(imageFile, inputParameters);
-        } else {
-            updatedParameters = inputParameters;
-        }
-
-        if (updatedParameters.getScale_units() == null) {
-            logger.info("did not find any scale units, perhaps specify scale-low=0.1 scale-high=180.0 scale-units=degwidth");
-        }
-
-        if (updatedParameters.getDownsample_factor() == 0.0f) {
-            logger.info("did not find any downsample factor, perhaps specify downsample=2");
-        }
-
-        if (updatedParameters.getRadius() == 0.0f) {
-            logger.info("did not find any radius, perhaps specify radius=10");
-        }
-
-        return executor.submit(() -> performSolve(imageFile, updatedParameters));
+    public Future<PlateSolveResult> customSolve(File imageFile, SubmitFileRequest parameters)
+            throws IOException, InterruptedException, FitsException {
+        return startCustomSolve(imageFile, parameters, null).asFuture(true);
     }
 
-    /**
-     * Shuts down the internally created executor, if this instance owns it.
-     * <p>
-     * Callers that supply their own executor through
-     * {@link AstrometryDotNetConfig} remain responsible for its lifecycle.
-     */
+    public PlateSolveOperation startBlindSolve(File imageFile, Consumer<PlateSolveOperation.Progress> progress) {
+        return startCustomSolve(imageFile, SubmitFileRequest.builder().withPublicly_visible("y").build(), progress);
+    }
+
+    /** Cancellation stops local requests and polling, not a remote job already accepted by Astrometry.net. */
+    public PlateSolveOperation startCustomSolve(File imageFile, SubmitFileRequest parameters,
+                                                Consumer<PlateSolveOperation.Progress> progress) {
+        SubmitFileRequest snapshot = gson.fromJson(gson.toJson(parameters), SubmitFileRequest.class);
+        synchronized (lifecycle) {
+            if (closed) throw new IllegalStateException("Astrometry.net client is closed.");
+            PlateSolveOperation operation = PlateSolveOperation.start(solveTimeout, progress, executor, context -> {
+                context.report(Phase.PREPARING, "Preparing Astrometry.net solve");
+                if (snapshot.getSession() == null || snapshot.getSession().isBlank()) {
+                    context.report(Phase.LOGGING_IN, "Logging in to Astrometry.net");
+                    loginLock.lockInterruptibly();
+                    try {
+                        context.checkCancelled();
+                        if (sessionID == null || sessionID.isBlank()) login(context);
+                        snapshot.setSession(sessionID);
+                    } finally {
+                        loginLock.unlock();
+                    }
+                }
+                context.checkCancelled();
+                if (isFitsFile(imageFile)) updateFromFitsHeader(imageFile, snapshot);
+                context.checkCancelled();
+                return performSolve(imageFile, snapshot, context);
+            });
+            operations.add(operation);
+            operation.completion().whenComplete((outcome, failure) -> {
+                synchronized (lifecycle) { operations.remove(operation); }
+            });
+            return operation;
+        }
+    }
+
+    /** Cancels and joins this client's solves, closes HTTP resources, and never shuts down a borrowed executor. */
     @Override
     public void close() {
-        if (ownsExecutor) {
-            executor.shutdownNow();
+        ArrayList<PlateSolveOperation> pending;
+        synchronized (lifecycle) {
+            closed = true;
+            pending = new ArrayList<>(operations);
         }
-    }
-
-    private PlateSolveResult performSolve(File imageFile, SubmitFileRequest inputParameters) throws InterruptedException {
-        Instant deadline = Instant.now().plus(solveTimeout);
-        String boundary = UUID.randomUUID().toString();
-        String requestJson = gson.toJson(inputParameters);
-
-        logger.fine("JSON parameter for solve request:" + requestJson);
-
+        pending.forEach(PlateSolveOperation::cancel);
+        client.shutdownNow();
+        if (ownsExecutor) executor.shutdownNow();
+        boolean interrupted = Thread.interrupted();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
         try {
-            HttpRequest submitRequest = requestBuilder(SUBMIT_FILE_URI)
-                    .POST(SubmitFileBodyPublisher.getBodyPublisher(imageFile, requestJson, boundary))
-                    .headers("Content-Type", "multipart/form-data; boundary=" + boundary)
-                    .build();
-
-            HttpResponse<String> response = sendRequest(submitRequest, SUBMIT_FILE_URI);
-            SubmitFileResponse submitFileResponse = gson.fromJson(response.body(), SubmitFileResponse.class);
-            logger.fine("Transformed file submit Response:" + submitFileResponse);
-
-            if (submitFileResponse == null || !"success".equals(submitFileResponse.getStatus())) {
-                logger.warning("Submit request was not succesful");
-                return failureResult("Submit request was not successful", response.body());
+            for (PlateSolveOperation operation : pending) {
+                while (!operation.isDone()) {
+                    try {
+                        operation.completion().toCompletableFuture().get(remainingCloseNanos(deadline), TimeUnit.NANOSECONDS);
+                    } catch (InterruptedException interruption) {
+                        interrupted = true;
+                    } catch (java.util.concurrent.ExecutionException impossible) {
+                        throw new IllegalStateException(impossible);
+                    }
+                }
             }
-
-            int jobID = waitForJobId(submitFileResponse, deadline);
-            JobResultResponse jobResResponse = waitForJobResult(jobID, deadline);
-            return mapSolveResult(submitFileResponse, jobID, jobResResponse);
-        } catch (SolveTimeoutException e) {
-            logger.warning(e.getMessage());
-            return failureResult(e.getMessage(), null);
-        } catch (IOException e) {
-            logger.warning("Astrometry.net solve failed: " + e.getMessage());
-            return failureResult("Astrometry.net solve failed: " + e.getMessage(), null);
-        } catch (RuntimeException e) {
-            logger.warning("Astrometry.net solve returned an unexpected response: " + e.getMessage());
-            return failureResult("Astrometry.net solve returned an unexpected response: " + e.getMessage(), null);
+            while (true) {
+                try {
+                    if (ownsExecutor && !executor.awaitTermination(remainingCloseNanos(deadline), TimeUnit.NANOSECONDS)) {
+                        throw new TimeoutException("Solve executor did not terminate.");
+                    }
+                    if (!client.awaitTermination(Duration.ofNanos(remainingCloseNanos(deadline)))) {
+                        throw new TimeoutException("HTTP client did not terminate.");
+                    }
+                    break;
+                } catch (InterruptedException interruption) {
+                    interrupted = true;
+                }
+            }
+        } catch (TimeoutException timeout) {
+            throw new IllegalStateException("Cannot confirm Astrometry.net client shutdown.", timeout);
+        } finally {
+            if (interrupted) Thread.currentThread().interrupt();
         }
     }
 
-    private int waitForJobId(SubmitFileResponse submitFileResponse, Instant deadline)
-            throws IOException, InterruptedException, SolveTimeoutException {
+    private static long remainingCloseNanos(long deadline) throws TimeoutException {
+        long remaining = deadline - System.nanoTime();
+        if (remaining <= 0) throw new TimeoutException("Client shutdown deadline expired.");
+        return remaining;
+    }
+
+    private PlateSolveResult performSolve(File imageFile, SubmitFileRequest parameters, Context context)
+            throws IOException, InterruptedException {
+        context.report(Phase.UPLOADING, "Uploading image to Astrometry.net");
+        String boundary = UUID.randomUUID().toString();
+        HttpRequest request = requestBuilder(SUBMIT_FILE_URI, context)
+                .POST(SubmitFileBodyPublisher.getBodyPublisher(imageFile, gson.toJson(parameters), boundary))
+                .header("Content-Type", "multipart/form-data; boundary=" + boundary).build();
+        HttpResponse<String> response = sendRequest(request, context);
+        SubmitFileResponse submission = gson.fromJson(response.body(), SubmitFileResponse.class);
+        if (submission == null || !"success".equals(submission.getStatus())) {
+            return failureResult("Submit request was not successful", response.body());
+        }
+        context.report(Phase.WAITING_FOR_JOB, "Waiting for Astrometry.net job");
+        int jobID = waitForJobId(submission, context);
+        context.report(Phase.SOLVING, "Astrometry.net is solving");
+        JobResultResponse result = waitForJobResult(jobID, context);
+        context.report(Phase.READING_RESULT, "Reading Astrometry.net result");
+        return mapSolveResult(submission, jobID, result);
+    }
+
+    private int waitForJobId(SubmitFileResponse submission, Context context) throws IOException, InterruptedException {
         while (true) {
-            ensureSolveStillRunning(deadline, "Timed out waiting for Astrometry.net to assign a job ID");
-            logger.fine("Will check if the request is being processed");
-
-            HttpRequest request = requestBuilder(SUBMISSION_PROGRESS_URI + submitFileResponse.getSubid())
-                    .GET()
-                    .build();
-            HttpResponse<String> response = sendRequest(request, SUBMISSION_PROGRESS_URI + submitFileResponse.getSubid());
-
-            if (response.body().contains("[null]")) {
-                sleepBeforeRetry(deadline, "JOB id not yet available");
-                continue;
-            }
-
-            SubmissionProgressResponse subProgResponse = gson.fromJson(response.body(), SubmissionProgressResponse.class);
-            logger.fine("Transformed SubmissionProgressResponse :" + subProgResponse);
-
-            int[] jobs = subProgResponse == null ? null : subProgResponse.getJobs();
-            if (jobs != null && jobs.length > 0) {
-                int jobID = jobs[0];
-                logger.fine("JOB id became available:" + jobID);
-                return jobID;
-            }
-
-            sleepBeforeRetry(deadline, "JOB id not yet available");
+            HttpResponse<String> response = sendRequest(requestBuilder(SUBMISSION_PROGRESS_URI + submission.getSubid(), context)
+                    .GET().build(), context);
+            SubmissionProgressResponse progress = gson.fromJson(response.body(), SubmissionProgressResponse.class);
+            int[] jobs = progress == null ? null : progress.getJobs();
+            if (!response.body().contains("[null]") && jobs != null && jobs.length > 0) return jobs[0];
+            context.pause(pollInterval);
         }
     }
 
-    private JobResultResponse waitForJobResult(int jobID, Instant deadline)
-            throws IOException, InterruptedException, SolveTimeoutException {
+    private JobResultResponse waitForJobResult(int jobID, Context context) throws IOException, InterruptedException {
         while (true) {
-            ensureSolveStillRunning(deadline, "Timed out waiting for Astrometry.net job " + jobID + " to complete");
-            logger.fine("Will check if job has been completed");
-
-            HttpRequest request = requestBuilder(JOB_PROGRESS_URI + jobID + "/info")
-                    .GET()
-                    .build();
-            HttpResponse<String> response = sendRequest(request, JOB_PROGRESS_URI + jobID + "/info");
-
-            if (response.body().contains("[null]")) {
-                sleepBeforeRetry(deadline, "JOB not yet completed");
-                continue;
-            }
-
-            JobResultResponse jobResResponse = gson.fromJson(response.body(), JobResultResponse.class);
-            logger.fine("Transformed JobResultResponse :" + jobResResponse);
-
-            String returnedJobStatus = jobResResponse == null ? null : jobResResponse.getStatus();
-            if ("success".equals(returnedJobStatus) || "failure".equals(returnedJobStatus)) {
-                logger.fine("JOB completed");
-                return jobResResponse;
-            }
-
-            sleepBeforeRetry(deadline, "JOB not yet completed");
+            HttpResponse<String> response = sendRequest(requestBuilder(JOB_PROGRESS_URI + jobID + "/info", context)
+                    .GET().build(), context);
+            JobResultResponse result = gson.fromJson(response.body(), JobResultResponse.class);
+            if (result != null && ("success".equals(result.getStatus()) || "failure".equals(result.getStatus()))) return result;
+            context.pause(pollInterval);
         }
     }
 
@@ -400,9 +378,9 @@ public class AstrometryDotNet implements AutoCloseable {
             Map<String, String> solveInformation = new HashMap<>();
             solveInformation.put("source", "astrometry.net");
             solveInformation.put("original_response", gson.toJson(jobResResponse));
-            solveInformation.put("annotated_image_link", ANNOTATED_IMAGE_LINK + jobID);
-            solveInformation.put("status_page_link", RESULTS_PAGE_LINK + submitFileResponse.getSubid());
-            solveInformation.put("wcs_link", WCS_BASE_URI + jobID);
+            solveInformation.put("annotated_image_link", serviceBaseUri.resolve(ANNOTATED_IMAGE_LINK + jobID).toString());
+            solveInformation.put("status_page_link", serviceBaseUri.resolve(RESULTS_PAGE_LINK + submitFileResponse.getSubid()).toString());
+            solveInformation.put("wcs_link", serviceBaseUri.resolve(WCS_BASE_URI + jobID).toString());
 
             if (jobResResponse.getCalibration() != null) {
                 solveInformation.put("dec", "" + jobResResponse.getCalibration().getDec());
@@ -432,47 +410,28 @@ public class AstrometryDotNet implements AutoCloseable {
         return new PlateSolveResult(false, failureReason, "", solveInformation);
     }
 
-    private HttpRequest.Builder requestBuilder(String uri) {
-        return HttpRequest.newBuilder()
-                .uri(URI.create(uri))
-                .timeout(requestTimeout);
+    private HttpRequest.Builder requestBuilder(String path, Context context) {
+        Duration timeout = requestTimeout;
+        if (context != null && context.remaining().compareTo(timeout) < 0) timeout = context.remaining();
+        return HttpRequest.newBuilder(serviceBaseUri.resolve(path)).timeout(timeout);
     }
 
-    private HttpResponse<String> sendRequest(HttpRequest request, String requestUri) throws IOException, InterruptedException {
-        HttpResponse<String> response = client.send(request, BodyHandlers.ofString());
-        logger.fine("HTTP request to " + requestUri + " succesfully made");
-        logger.fine("Response header:" + response.headers());
-        logger.fine("Response body:" + response.body());
-        logger.fine("Response status code:" + response.statusCode());
+    private HttpResponse<String> sendRequest(HttpRequest request, Context context) throws IOException, InterruptedException {
+        if (context != null) context.checkCancelled();
+        HttpResponse<String> response;
+        try {
+            response = client.send(request, BodyHandlers.ofString());
+        } catch (HttpTimeoutException timeout) {
+            if (context != null && request.timeout().orElse(requestTimeout).compareTo(requestTimeout) < 0) {
+                context.pause(context.remaining());
+            }
+            throw timeout;
+        }
+        if (context != null) context.checkCancelled();
         if (response.statusCode() >= 400) {
-            throw new IOException("Astrometry.net request to " + requestUri + " failed with status code " + response.statusCode());
+            throw new IOException("Astrometry.net request failed with HTTP status " + response.statusCode());
         }
         return response;
-    }
-
-    private void ensureSolveStillRunning(Instant deadline, String timeoutMessage)
-            throws InterruptedException, SolveTimeoutException {
-        if (Thread.currentThread().isInterrupted()) {
-            throw new InterruptedException("Astrometry.net solve was interrupted");
-        }
-        if (!Instant.now().isBefore(deadline)) {
-            throw new SolveTimeoutException(timeoutMessage);
-        }
-    }
-
-    private void sleepBeforeRetry(Instant deadline, String waitMessage)
-            throws InterruptedException, SolveTimeoutException {
-        ensureSolveStillRunning(deadline, waitMessage);
-        long remainingMillis = Math.max(1L, Duration.between(Instant.now(), deadline).toMillis());
-        long sleepMillis = Math.min(pollInterval.toMillis(), remainingMillis);
-        logger.fine(waitMessage);
-        Thread.sleep(Math.max(1L, sleepMillis));
-    }
-
-    private synchronized void ensureLoggedIn() throws IOException, InterruptedException {
-        if (sessionID == null || sessionID.isBlank()) {
-            login();
-        }
     }
 
     private boolean isFitsFile(File imageFile) {
@@ -608,9 +567,4 @@ public class AstrometryDotNet implements AutoCloseable {
         return configuredDuration;
     }
 
-    private static final class SolveTimeoutException extends Exception {
-        private SolveTimeoutException(String message) {
-            super(message);
-        }
-    }
 }

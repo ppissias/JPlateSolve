@@ -2,7 +2,7 @@
 
 Reviewed against the source tree on 2026-10-21, at commit `7b5cb30`. This is the decision list for JPlateSolve. It holds **pending work and open decisions**. The library is the plate-solving engine behind [SpacePixels](../SpacePixels): local solves through ASTAP, and online solves through the Astrometry.net HTTP API.
 
-The same kind of list for the detection engine is [JTransient's design list](../JTransient/DESIGN-IMPROVEMENTS.md). The application list is [SpacePixels' design list](../SpacePixels/DESIGN-IMPROVEMENTS.md). Those documents already record that a plate solve waits on this library with no cancel. This review is the library side of that wait.
+The same kind of list for the detection engine is [JTransient's design list](../JTransient/DESIGN-IMPROVEMENTS.md). The application list is [SpacePixels' design list](../SpacePixels/DESIGN-IMPROVEMENTS.md). Completed process ownership, cancellation and client lifecycle work (JP-01, JP-02 and JP-05) is recorded in [the October archive](docs/archive/design-improvements-completed-2026-10.md). SpacePixels now adopts that API in version 1.0.1.
 
 ## Status and scope
 
@@ -17,8 +17,8 @@ Two checks were executed while reading the code. With Gson 2.13.2, a request obj
 
 ## What to preserve
 
-- **A small engine with two backends and one result.** Callers solve through [ASTAPInterface](src/main/java/io/github/ppissias/jplatesolve/astap/ASTAPInterface.java) or [AstrometryDotNet](src/main/java/io/github/ppissias/jplatesolve/astrometrydotnet/AstrometryDotNet.java) and read a [PlateSolveResult](src/main/java/io/github/ppissias/jplatesolve/PlateSolveResult.java). The library stays free of Swing, FITS writing and session folders. SpacePixels owns the header update and the deletion of solver files.
-- **The caller chooses the waiting thread.** Both entry points return a `Future`. SpacePixels already waits on its plate-solve worker, in [PlateSolveTask](../SpacePixels/src/main/java/eu/startales/spacepixels/tasks/PlateSolveTask.java). Keep that split.
+- **A small engine with two backends and one result.** Callers solve through [ASTAPInterface](src/main/java/io/github/ppissias/jplatesolve/astap/ASTAPInterface.java) or [AstrometryDotNet](src/main/java/io/github/ppissias/jplatesolve/astrometrydotnet/AstrometryDotNet.java) and read a [PlateSolveResult](src/main/java/io/github/ppissias/jplatesolve/PlateSolveResult.java). The library stays free of Swing, FITS writing and session folders. SpacePixels owns the header update and cleanup of successful solver files; JPlateSolve owns rollback of failed or cancelled local solves.
+- **The caller chooses the waiting thread.** Both entry points expose a cleanup-aware operation and retain legacy `Future` adapters. SpacePixels already waits on its plate-solve worker, in [PlateSolveTask](../SpacePixels/src/main/java/eu/startales/spacepixels/tasks/PlateSolveTask.java). Keep that split.
 - **The ASTAP launch shape that is already right.** The executable is started with an argument array from the executable's directory, so a path with spaces needs no shell and the star database beside the program can be found. `-wcs` asks for the FITS-shaped header SpacePixels imports.
 - **The streaming upload.** [SubmitFileBodyPublisher.getBodyPublisher](src/main/java/io/github/ppissias/jplatesolve/astrometrydotnet/util/SubmitFileBodyPublisher.java) sends the file from disk. The in-memory multipart helper is a separate diagnostic path. Keep the solve on the streaming path.
 - **Timeouts that a caller can already set.** The ASTAP reader takes a `Duration`. [AstrometryDotNetConfig](src/main/java/io/github/ppissias/jplatesolve/astrometrydotnet/AstrometryDotNetConfig.java) takes a per-request timeout, a solve timeout and a poll interval. The gap is that the defaults, and the SpacePixels call, do not use that room. See JP-02 and JP-06.
@@ -29,65 +29,13 @@ Two checks were executed while reading the code. With Gson 2.13.2, a request obj
 
 | ID | Priority | Status | Design improvement | First useful result |
 |---|---|---|---|---|
-| JP-01 | High | Proposed | Own the ASTAP process until it has exited | A timeout, a failure or a second solve cannot observe a stale `.ini` or leave `astap` running. |
-| JP-02 | High | Proposed | Report progress and honour cancellation for both solvers | SpacePixels can offer Cancel during a plate solve, and the wait ends when the user cancels. |
 | JP-03 | High | Proposed | Send only the constraints the caller set, and parse sexagesimal signs | A frame with no pointing header is a blind solve. A declination of −0° 30′ stays south of the equator. |
 | JP-04 | High | Proposed | Take the Astrometry.net API key from the caller | Online solving uses the observer's own key. The placeholder constant is retired. |
-| JP-05 | Medium | Proposed | Close the HTTP client and its threads with the session | Importing another folder does not leave the previous client's threads running. |
 | JP-06 | Medium | Proposed | Let a known field shorten the search, and size timeouts for a large frame | A 61-megapixel frame can carry a radius, a scale and an upload budget. |
 | JP-07 | Medium | Proposed | One result contract for success, rejection, timeout and cancellation | The application can classify a failure without reading prose, including failures after the upload has started. |
 | JP-08 | Medium | Proposed | Encode the Java target and test the contracts offline | The behaviours above are checked on the declared JDK, without a live call to Astrometry.net. |
 
-## JP-01. Own the ASTAP process until it has exited
 
-**Evidence.** [ASTAPInterface.solveImage](src/main/java/io/github/ppissias/jplatesolve/astap/ASTAPInterface.java) starts `astap` with `Runtime.exec` and never reads standard output or standard error. It then sleeps two seconds. If the process has already exited with a code above zero, the future fails with that code and the `.ini` is never opened. If the process is still alive, the exit code is never observed again and the process is never destroyed.
-
-[ASTAPSolveResultsReader](src/main/java/io/github/ppissias/jplatesolve/astap/ASTAPSolveResultsReader.java) then waits until a sibling `.ini` exists, up to two minutes, polling every 250 ms. The deadline starts when that wait starts, after the two-second sleep. The reader returns as soon as the file exists. It does not record the process start time, so an `.ini` left by an earlier run satisfies the wait immediately. A file that exists and is still being written is parsed at once. `Future.cancel(true)` interrupts the worker thread. The worker is a daemon. Neither cancellation, interruption during the opening sleep, nor the timeout destroys the process.
-
-The expected filenames come from the last `.` in the full path. A path with no dot throws `StringIndexOutOfBoundsException`. A directory whose name contains a dot and a file with no extension, such as `C:\data.set\frame`, is paired with `C:\data.ini`.
-
-**Risk and proposal.** An unread pipe can stall a child once the buffer fills. The two-minute wait then expires while ASTAP is blocked or still searching, and the process keeps running. It can write the `.ini` after SpacePixels has already treated the solve as failed and cleaned up. The next solve of the same frame sees that file and can return the previous solution while a new ASTAP is writing the same path. A fast non-zero exit hides the `ERROR` text ASTAP writes into the `.ini`.
-
-Treat the process as the completion signal. Drain both streams on the worker, or the caller-supplied log sink. Wait until the process has exited, then parse an `.ini` that contains `PLTSOLVD`. Ignore an `.ini` whose last-modified time is earlier than the launch. On timeout, cancellation and failure, destroy the process and wait for it to exit before the future completes. Remove a partial file from that run. Derive sibling names from the file name, and keep the full path unchanged when the name has no dot.
-
-Keep the argument array and the executable's directory as the working directory. Keep `-wcs`.
-
-**Review feedback — output ownership and bounded cleanup.** Modification time alone cannot identify this run's outputs: timestamp precision and overlapping solves can admit an old file. Prefer isolated per-operation output paths where ASTAP supports them; otherwise define exclusive ownership of the output stem and a pre-launch policy for existing sidecars. `frame.fit` and `frame.fits` in the same directory also collide. Verify the `.wcs` belongs to this run before exposing its link, since SpacePixels imports that file. Cleanup must delete only files owned by this operation. For extensionless input, preserve the input path and append the output suffix; never use the input itself as a sidecar.
-
-Drain stdout and stderr concurrently with the process wait, or merge and drain them on a separate task. Reading one stream to EOF before the other, or before checking the deadline, can still hang. Bound retained diagnostics and isolate a slow or throwing log sink. Start a monotonic deadline before launch; on expiry request termination, escalate to forced termination after a bounded grace period, and report cleanup failure if exit cannot be confirmed. Add overlapping-stem, stale-WCS and termination-escalation cases to acceptance.
-
-**Acceptance.** With a stand-in executable: a verbose child that fills the pipe still exits; a child that exits in under two seconds yields the `.ini` error text; a pre-existing `.ini` is not returned as this run's solution; a timeout and a cancel both leave no `astap` process; a path with no extension does not throw. Repeat a solve of one file after a forced timeout and confirm the second result comes from the second process.
-
-## JP-02. Report progress and honour cancellation
-
-**Evidence.** A plate solve in SpacePixels is [JobKind.PLATE_SOLVE](../SpacePixels/src/main/java/eu/startales/spacepixels/jobs/JobKind.java), and that kind is not cancellable. The comment records why: plate solving waits on an external solver. The progress dialog therefore offers no Cancel. The status text is the indeterminate line "Plate solving selected image...". [PlateSolveTask](../SpacePixels/src/main/java/eu/startales/spacepixels/tasks/PlateSolveTask.java) blocks on `Future.get()` for the whole operation.
-
-Inside the library the waits are fixed and silent. ASTAP polls a file for up to two minutes (JP-01). Astrometry.net polls every five seconds for up to fifteen minutes ([AstrometryDotNet](src/main/java/io/github/ppissias/jplatesolve/astrometrydotnet/AstrometryDotNet.java), `DEFAULT_SOLVE_TIMEOUT` and `DEFAULT_POLL_INTERVAL`). There is no listener. SpacePixels calls the two-argument `solveImage` and `new AstrometryDotNet()`, so the application never passes the durations the library already accepts.
-
-This is the same gap SpacePixels D04 and JTransient JA-03 describe for detection: a cancel is real only where the engine checks it, and the time the user waits is the time until the next check. For plate solving the application cannot enter that arrangement, because this library has no check to enter.
-
-**Risk and proposal.** A blind ASTAP search that overruns two minutes becomes a timeout with the process still running (JP-01). An Astrometry.net job that is slow or pointed at the wrong sky (JP-03) occupies the window for up to fifteen minutes, with no Cancel and no phase. Closing the future's thread does not define when the solver has stopped.
-
-Add a small operation handle shared by both backends:
-
-- a cancel request the worker checks between the launch, each poll and each HTTP call;
-- a listener invoked on the worker for phase and, where known, completed and total work: launching, uploading, waiting for a job, solving, reading the result;
-- a terminal state that separates cancelled, timed out, rejected by the solver, and failed.
-
-Cancellation destroys the ASTAP process as in JP-01, interrupts the HTTP call, and stops polling. The future completes only after that work has finished. An Astrometry.net job already accepted by the server may keep running there; the handle documents that the local wait has stopped. Keep today's `Future<PlateSolveResult>` methods as adapters that supply no listener and the current default durations.
-
-**Review feedback — cancellation needs a separate completion contract.** Today's `FutureTask.cancel(true)` can release `get()` with `CancellationException` before worker cleanup finishes. A `finally` block alone cannot make that future certify process exit. Give the new handle a cancel-request method and a completion stage that resolves after cleanup, including a cancelled outcome; document the weaker semantics of legacy futures. Define the winner of a cancel/success race and test cancellation before launch, while queued, and during result parsing as well as during active work. See the [Java Future contract](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/Future.html).
-
-Also move login and FITS-header preparation inside the new operation. Currently `blindSolve` and `customSolve` can perform synchronous login before returning a future, and `customSolve` reads the header synchronously. Returning a future does not currently guarantee a non-blocking entry point. Specify listener exception handling and require callbacks to return promptly, or dispatch them through a bounded mechanism so they cannot hold up cancellation.
-
-SpacePixels can then mark plate solve cancellable, forward the listener to `JobContext.progress`, and pass a duration. The application change belongs in SpacePixels after the library method exists. Suggested shape once this is agreed:
-
-- Cancel on the plate-solve dialog, using the same coordinator path as detection.
-- Progress text for the phase, plus elapsed time. Counts only when the solver actually provides them.
-- A documented solve budget for ASTAP and for Astrometry.net, passed in, with the library defaults remaining for other callers.
-- Measure the time from Cancel to process exit and to the job's cancelled outcome, on a large frame, and record it beside the D04 engine timings.
-
-**Acceptance.** Cancel during the ASTAP wait, during upload and during Astrometry.net polling. Confirm one terminal state, no successful result after cancel, and no leftover ASTAP process. A slow listener must not be required for correctness. A solve that receives no cancel still returns the same result as today's adapter on a fixture.
 
 ## JP-03. Send only the constraints the caller set
 
@@ -99,7 +47,7 @@ The Astrometry.net upload API uses `center_ra`, `center_dec` and `radius` togeth
 
 SpacePixels builds the request in `PlateSolveService.solve` with scale 0.1–180°, downsample 2 and radius 10, and leaves the center unset. A frame whose header lacks `OBJCTRA` and `OBJCTDEC`, or writes them with colons or unit letters, is therefore uploaded as a 10° search around RA 0h, Dec 0°. `blindSolve` also sets `publicly_visible` to `y`. SpacePixels does not use `blindSolve`; it sends `n`.
 
-`customSolve` writes the session and any parsed center into the caller's request object.
+The 1.0.1 cancellation work snapshots the custom request before submitting it; caller mutation is already fixed. Numeric omission and coordinate parsing remain open.
 
 **Risk and proposal.** Most unsolved frames are not in that 10° patch. The service searches there until it fails or the fifteen-minute budget ends, which is the wait in JP-02 spent on a constraint the user did not choose. A field between 0° and −1° declination, written in the usual `-00 30 00` form, is hinted to the northern hemisphere. An explicit center at 0h or on the equator cannot be told from "leave this unset". Sending `positional_error` 0 replaces the server's default of 1.
 
@@ -113,11 +61,11 @@ SpacePixels should keep sending `n`, scale and downsample. It should send a radi
 
 ## JP-04. Take the API key from the caller
 
-**Evidence.** `AstrometryDotNet.DEFAULT_API_KEY` is the literal `XXXXXXXX`, introduced in commit `711bdbe`. The Astrometry.net API documentation uses the same sort of placeholder in its login example. It is not an account key. [README.md](README.md) tells callers that the no-argument constructor uses a built-in guest key. SpacePixels constructs `new AstrometryDotNet()` and has no API-key field on its application settings. `login` posts that constant. A rejected login throws before the upload, which SpacePixels already surfaces through `astrometryNetFailure`.
+**Evidence.** `AstrometryDotNet.DEFAULT_API_KEY` is the literal `XXXXXXXX`, introduced in commit `711bdbe`. The Astrometry.net API documentation uses the same sort of placeholder in its login example. It is not an account key. [README.md](README.md) now warns that the no-argument constructor uses a placeholder, not a working guest key. SpacePixels constructs `new AstrometryDotNet()` and has no API-key field on its application settings. `login` posts that constant. A rejected login fails the asynchronous operation before upload. SpacePixels still needs the configured key and consistent network-failure wording.
 
 **Risk and proposal.** Online solving from the application fails at login for every frame. Embedding a working shared key in the jar would put every user on one account and would publish that account's key in source control.
 
-Require a key. A blank key fails in the constructor, or at `login`, with a message that says the key is missing. Remove the placeholder constant and the guest-key sentence from the README. SpacePixels gains a setting on the astrometry page, stored with the other application preferences, and passes it to `AstrometryDotNetConfig`. The log line that prints the login JSON currently includes the key at `FINE`; stop logging the key.
+Require a key. A blank key fails in the constructor, or at `login`, with a message that says the key is missing. Remove the placeholder constant and the guest-key sentence from the README. SpacePixels gains a setting on the astrometry page, stored with the other application preferences, and passes it to `AstrometryDotNetConfig`. The cancellation implementation removed login JSON/form and raw request/response logging. Keep that redaction when adding credential validation.
 
 The setting is an application change. It is useful only together with this library change, because today's constructor cannot accept a key without the caller knowing to avoid the no-argument form. The no-argument constructor can remain as a deprecated adapter that fails with the same clear error, so an old call site does not silently keep using `XXXXXXXX`.
 
@@ -125,23 +73,6 @@ The setting is an application change. It is useful only together with this libra
 
 **Acceptance.** Login with an empty key fails before any HTTP call, in a unit test. A test double receives the key the caller supplied. README and the SpacePixels manual describe where the observer gets a key and where it is stored. No key value is added to the repository.
 
-## JP-05. Close the client with the session that created it
-
-**Evidence.** The no-argument client creates a fixed pool of three threads and an `HttpClient`. `Executors.newFixedThreadPool` uses non-daemon threads. `close` calls `shutdownNow` on the pool when this instance created it, and does not wait for the threads to finish. It does not close the `HttpClient`. On the Java 21 baseline the README asks for, `HttpClient` implements `AutoCloseable`.
-
-SpacePixels constructs one client inside every `ImageProcessing`, via `PlateSolveService`. [ImageProcessing.close](../SpacePixels/src/main/java/eu/startales/spacepixels/util/ImageProcessing.java) shuts down a different executor. Nothing calls `AstrometryDotNet.close`. Each import builds a new processor and closes the previous one.
-
-**Risk and proposal.** The pool threads are live roots. After the processor is closed and dropped, those three threads and the client they keep reachable stay for the life of the process. A second import adds another three. The HTTP client's own threads follow the same pattern while the client stays open.
-
-`close` should shut the pool down, await termination for a bounded interval, and close the `HttpClient` when this instance created it. A caller-supplied executor stays the caller's, as the config type already says. An in-flight solve is cancelled as in JP-02 before the pool stops, so `shutdownNow` is not the only signal.
-
-SpacePixels calls that `close` from `ImageProcessing.close`. Until JP-02 exists, closing may interrupt a solve that is still running; the application already refuses a second long job, and close runs when the session is replaced or the window exits.
-
-**Review feedback — qualify the leak and close semantics.** The fixed pool creates threads lazily: constructing a processor does not immediately add three threads. Submitted solves can leave up to three non-daemon workers per unclosed client; idle pool workers alone do not prove that the client itself remains reachable. Keep the executor leak finding, but measure HTTP-client retention separately.
-
-Java 21 `HttpClient.close()` waits for outstanding operations, so calling it alone does not provide bounded shutdown. Define cancellation, `shutdown`/`shutdownNow` and bounded `awaitTermination` sequencing for both resources, with an explicit outcome if termination fails; see the [HttpClient lifecycle contract](https://docs.oracle.com/en/java/javase/21/docs/api/java.net.http/java/net/http/HttpClient.html). Track this client's operations even on a caller-owned executor: cancel those operations without shutting that executor down. Explicitly cancel queued futures removed by executor shutdown so they cannot remain pending forever. Test close during an upload, close before first use, and rejection of new solves after close.
-
-**Acceptance.** Open a client, run a solve against a local stub, close, and confirm the pool's threads are gone and a second close is harmless. Construct two clients and close one; the other still completes. A SpacePixels-level test, or a focused lifecycle test, that opens two processors and closes the first shows a single live plate-solve pool.
 
 ## JP-06. Let a known field shorten the search
 
@@ -155,7 +86,7 @@ The README says the library reads FITS headers such as `OBJCTRA`, `OBJCTDEC` and
 
 On the HTTP side the per-request timeout is also the upload budget: `HttpRequest.timeout` is `requestTimeout`, default 60 seconds, and the same duration is the connect timeout. A 61-megapixel 16-bit frame is on the order of 120 MB before compression and headers. The upload is one request. A slow link can exhaust 60 seconds while the 15-minute solve budget is untouched. SpacePixels' large-frame notes (61 MPix in the manual and in D04) are this case.
 
-**Risk and proposal.** `-r 360` asks for a whole-sky search even when the header has a position, so a large frame spends the two-minute budget inside ASTAP and then hits JP-01. Annotation adds a full-size jpeg the application throws away. A 60-second cap on the upload fails a large frame that would have solved once the bytes were accepted.
+**Risk and proposal.** `-r 360` asks for a whole-sky search even when the header has a position, so a large frame can exhaust the two-minute ASTAP budget. Annotation adds a full-size jpeg the application throws away. A 60-second cap on the upload fails a large frame that would have solved once the bytes were accepted.
 
 Make radius, right ascension, declination, field of view and annotation parameters of the ASTAP call. For a FITS file, the default command omits `-r` and `-fov` so ASTAP can use its own header rules, and omits `-annotate` unless the caller asks. Keep `-z 0` and `-wcs`. Where the caller, or a header, supplies a center and a scale, pass a modest radius and `-fov` explicitly and record the values in the result metadata.
 
@@ -165,7 +96,7 @@ The README's focal-length sentence should be rewritten when this lands, so it de
 
 **Review feedback — units, defaults and deadline correction.** Specify conversions at the backend boundary: the [ASTAP manual](https://www.hnsky.org/astap.htm) defines `-ra` in hours, `-spd` as declination plus 90 degrees, and `-fov` as image height in degrees; Astrometry.net center RA is degrees and `degwidth` describes width. Focal length and pixel size yield an angular pixel scale; deriving a field size also needs the corresponding image dimension and binned-pixel interpretation. Add an asymmetric-image fixture to catch height/width confusion. Verify omitted-option behaviour with a named installed ASTAP version, including a FITS file lacking hints, before claiming it guarantees an unconstrained search.
 
-The upload already consumes the current solve budget: `performSolve` creates its deadline before sending the file. Login, header parsing and executor queue time are excluded, and an in-flight HTTP call can overrun the deadline because it uses the full request timeout. Define exactly which phases the overall budget covers and cap each request and sleep by the remaining monotonic budget. Test a slow response crossing the overall deadline and queue delay as well as a slow upload.
+Already delivered with 1.0.1: the monotonic total budget includes queue time, login, header parsing, upload and polling, and caps HTTP requests and polling delays. Separate upload/connect/status budgets and a measured large-frame tuning policy remain open.
 
 **Acceptance.** A command-capture test: default FITS launch has no `-r 360` and no `-annotate`; an explicit radius and annotation appear when requested. A local HTTP stub: an upload that takes longer than the status timeout still completes when the upload budget allows it, and a connect failure still fails promptly. Compare a hinted and an unhinted ASTAP command on one real frame before changing SpacePixels' defaults, and record the wall time.
 
@@ -173,9 +104,9 @@ The upload already consumes the current solve budget: `performSolve` creates its
 
 **Evidence.** `PlateSolveResult` is documented as immutable. The map stored by the constructor is the map returned to the caller, and both backends pass a mutable `HashMap`.
 
-ASTAP success uses a null failure reason and the ini's warning. Astrometry.net success uses an empty string for both the failure reason and the warning. A solver rejection, a solve-budget timeout and an HTTP error inside `performSolve` all become a failed `PlateSolveResult` whose reason is a sentence. An ASTAP timeout is instead an `IOException` from the future. Cancellation has no state (JP-02).
+ASTAP success uses a null failure reason and the ini's warning. Astrometry.net success uses an empty string for both the failure reason and the warning. The new operation already distinguishes solver rejection, failure, timeout and cancellation with preserved causes. Legacy adapters keep their older result/exception distinction; metadata immutability and normalized strings remain open.
 
-SpacePixels classifies network failures in `PlateSolveService.astrometryNetFailure`, by exception type: unreachable host, HTTP timeout, or the first message in the cause chain. That helper wraps only the `login` / `customSolve` call that submits the future. `performSolve` catches `IOException` and `RuntimeException` and returns a failed result, so a drop during upload or polling never reaches the classifier. The dialog then shows the library sentence.
+SpacePixels' `astrometryNetFailure` classifier still needs to apply to the full asynchronous operation, including upload and polling, using preserved causes and richer protocol diagnostics.
 
 **Risk and proposal.** Two callers can disagree about an empty reason versus a null one. A caller can put entries into a result another viewer still holds. The application's careful network text applies to the start of the solve and not to the long wait.
 
@@ -191,19 +122,9 @@ Keep `PlateSolveResult` and `isSuccess`. Copy the metadata map in the constructo
 
 ## JP-08. Encode the Java target and test the contracts offline
 
-**Evidence.** [README.md](README.md) requires Java 21. [build.gradle](build.gradle) sets no toolchain and no release flag, so the bytecode is whatever JDK happens to run Gradle. The README's dependency snippet asks for `jplatesolve:1.0.0`; the project version is `1.0.1`. Javadoc is generated with doclint disabled.
+**Already delivered with 1.0.1 cancellation.** Java toolchain and `--release` are pinned to 21, the README names 1.0.1, and default tests exercise both solver backends with a Java child process and loopback HTTP server. The configurable service root also derives result URLs. See the archive for validation and the jar-only SpacePixels check.
 
-The only unit tests are the three ini-reader cases. There is no test for coordinate parsing, the JSON body, the API-key check, process lifetime, cancellation or HTTP status handling. `integrationTest` logs into the live service and uploads real images. With the placeholder key those tests cannot pass. They are correctly excluded from the default `test` task. `check`, which the Central bundle runs, therefore never exercises the online client.
-
-SpacePixels resolves this library from Maven Central unless `useLocalJPlateSolveBuild` (or `USE_LOCAL_JPLATE_SOLVE_BUILD`) is set. A composite build does not prove the published jar.
-
-**Risk and proposal.** A contract fixed in JP-01–07 can regress with nothing in `test` to see it. A release built on a newer JDK than 21 can be unreadable by the application. The README currently describes a guest key and header hints the code does not implement (JP-04, JP-06).
-
-Set the toolchain and `--release` to 21, matching the README and SpacePixels. Add the unit tests named in the acceptance sections above, using a stand-in process and a local HTTP stub. Keep `integrationTest` opt-in, and skip it with a clear message when no key is configured. Re-enable doclint for the public types, or fix the tags that fail, rather than leaving it off as the permanent setting. When a change adds a method SpacePixels will call, name the library version, keep the previous version working for the current application, and run SpacePixels tests against that version in both the composite build and the published-jar arrangement.
-
-**Acceptance.** `test` passes on JDK 21 with no network. `integrationTest` does not run as part of `test` or `check`. The README version, the Java requirement and the described solve inputs match the build and the code.
-
-**Review feedback — make offline verification possible early.** The HTTP client and all endpoint URLs are currently constructed or fixed internally. Add a narrow injectable transport or configurable service base URI so a loopback stub can exercise login, upload and polling without contacting production; derive result links consistently for that configuration. Use a Java helper process for portable process-lifecycle tests. Bring this test infrastructure and the Java target into the first implementation changes, as the ordering section already suggests. Configure live tests to receive an external key explicitly; skipping when it is absent must happen before client construction or login. Document local tests as requiring no external service, since a loopback HTTP stub still uses networking. Verify the release artifact's Java target and its dependency compatibility on JDK 21 before testing SpacePixels against the jar.
+**Still pending.** Add the JP-03/04/07 request, credential and protocol fixtures as those contracts land. Live `integrationTest` must receive an external key and skip before client construction when it is absent. Re-enable doclint for public types, fixing the remaining tags rather than suppressing it permanently. Keep live checks separate from `test` and `check`; offline tests need no external service (loopback networking is still used).
 
 ## What SpacePixels does after a library change
 
@@ -211,11 +132,8 @@ SpacePixels already depends on this library for one frame at a time. The applica
 
 | Library item | Application follow-up | Related application work |
 |---|---|---|
-| JP-01 | Keep deleting `.ini`, `.wcs` and the annotated jpeg after the solve returns. Cleanup is no longer what stops ASTAP. | The staged WCS write stays as it is. |
-| JP-02 | Mark `PLATE_SOLVE` cancellable. Forward solver phases to the job progress. Pass a solve budget. Measure Cancel on a large frame. | D04, the plate-solve row in `JobKind` |
 | JP-03 | Send a radius only with a center the library parsed. Keep `publicly_visible=n`. | `PlateSolveService.solve` |
 | JP-04 | Add the observer's Astrometry.net key to application settings and pass it on the client. | Astrometry configuration page, manual |
-| JP-05 | Call `AstrometryDotNet.close` from `ImageProcessing.close`. | Session replacement and window exit |
 | JP-06 | Adopt a hinted ASTAP command and a longer upload budget after the timings in JP-06 are written down. | Large-frame plate solve |
 | JP-07 | Classify upload and polling failures with the same categories as login failures. | `astrometryNetFailure`, `showSolveOutcome` |
 
@@ -223,9 +141,7 @@ Plate solve remains a SpacePixels job. This library does not gain a Swing dialog
 
 ## Ordering
 
-A practical sequence, each item still needing its own decision:
-
-1. **JP-04 and JP-03.** Online solving can succeed login, and a frame without a pointing header is no longer confined to the origin. Both are observable with a stub, before any ASTAP install.
-2. **JP-01.** Stops orphaned ASTAP processes and stale solutions. Independent of the online client.
-3. **JP-02, then the SpacePixels cancel follow-up.** Depends on JP-01 for the process kill. This is the wait the application already documents.
-4. **JP-05, JP-07, JP-06, JP-08.** Lifecycle and the result categories can land with JP-02. The search-radius and upload-budget changes want a before-and-after timing on a real large frame. The toolchain and the offline tests should arrive with the first of these changes, not after all of them.
+1. **JP-04 and JP-03.** Configure the observer's key and correct omission/coordinate hint handling; cancellation intentionally leaves these defaults unchanged.
+2. **JP-07.** Normalize metadata and carry structured protocol/error diagnostics through the application.
+3. **JP-06.** Tune large-frame search and upload budgets only after a measured real solve.
+4. **Remaining JP-08 checks.** Add contract fixtures with each change and finish live-test key handling/doclint.

@@ -10,14 +10,14 @@ JPlateSolve supports two completely different backend engines, allowing you to c
 
 1. **Local Plate Solving (ASTAP):** Interfaces directly with a local installation of the blazing-fast [ASTAP (Astrometric STAcking Program)](https://www.hnsky.org/astap.htm) executable. Perfect for rapid, offline solving.
 2. **Cloud Plate Solving (Astrometry.net):** A fully featured Java wrapper for the [nova.astrometry.net](https://nova.astrometry.net/api_help) REST API. Supports both blind solving and custom solving with parameters.
-3. **Smart FITS Parsing:** Automatically reads `nom.tam.fits` headers (like `OBJCTRA` and `OBJCTDEC`) to extract focal length and coordinate hints, dramatically speeding up the solving process.
-4. **Fully Asynchronous:** All solving methods return Java `Future<PlateSolveResult>` objects, ensuring your application's UI thread is never blocked while waiting for a heavy solve to complete.
+3. **Smart FITS Parsing:** Automatically reads `nom.tam.fits` headers (like `OBJCTRA` and `OBJCTDEC`) to extract coordinate hints, dramatically speeding up the solving process.
+4. **Asynchronous and Cancellable:** New solve operations expose phase progress and a completion stage that resolves after local cleanup. Legacy `Future<PlateSolveResult>` methods remain available.
 
 ## ⚠️ Prerequisites
 
 * **Java 21 or higher:** 
 * **For Local Solving:** You must have [ASTAP](https://www.hnsky.org/astap.htm) and its star databases (e.g., H18 or V17) installed on the host machine.
-* **For Cloud Solving:** [nova.astrometry.net](https://nova.astrometry.net/) will be used 
+* **For Cloud Solving:** obtain your own [Astrometry.net API key](https://nova.astrometry.net/api_help). The no-argument client's `XXXXXXXX` default is a placeholder, not a working guest key.
 
 ## 🚀 Quick Start Guide
 
@@ -25,7 +25,7 @@ JPlateSolve supports two completely different backend engines, allowing you to c
 If you are using Gradle, include JPlateSolve in your dependencies:
 ```groovy
 dependencies {
-   implementation 'io.github.ppissias.jplatesolve:jplatesolve:1.0.0'
+   implementation 'io.github.ppissias.jplatesolve:jplatesolve:1.0.1'
 }
 ```
 
@@ -77,10 +77,7 @@ public class CloudSolverApp {
    public void solveInCloud() throws Exception {
       File targetImage = new File("C:/AstroData/light_frame.fits");
 
-      try (AstrometryDotNet cloudSolver = new AstrometryDotNet()) {
-         // Uses the built-in guest API key by default.
-         // Pass your own key to new AstrometryDotNet("your-api-key") to override it.
-         cloudSolver.login();
+      try (AstrometryDotNet cloudSolver = new AstrometryDotNet("your-api-key")) {
 
          System.out.println("Uploading image and awaiting blind solve...");
 
@@ -101,6 +98,34 @@ public class CloudSolverApp {
    }
 }
 ```
+
+## Cancellation and completion in 1.0.1
+
+For new integrations, use `ASTAPInterface.startSolve(executable, imagePath, budget, listener)`,
+`AstrometryDotNet.startBlindSolve(image, listener)`, or
+`AstrometryDotNet.startCustomSolve(image, parameters, listener)`.
+
+```java
+PlateSolveOperation operation = ASTAPInterface.startSolve(
+        astapExe, imagePath, Duration.ofMinutes(2),
+        progress -> System.out.println(progress.phase() + ": " + progress.message()));
+operation.cancel();
+PlateSolveOperation.Outcome outcome = operation.completion().toCompletableFuture().get();
+```
+
+- `cancel()` requests stopping; it does **not** mean resources are already released. Join `completion()` before starting conflicting work or discarding the owning session.
+- Outcomes distinguish `SUCCEEDED`, solver `REJECTED`, `FAILED`, `TIMED_OUT`, and `CANCELLED`. A first accepted cancellation or timeout wins over a later solver answer. A committed answer wins a later cancellation. Cleanup failures are reported as `FAILED`, never as a clean cancellation.
+- The monotonic total budget starts before queueing and includes login, FITS preparation, process launch, upload and polling. Defaults remain **2 minutes for ASTAP** and **15 minutes for Astrometry.net**. Configure cloud budgets using `AstrometryDotNetConfig`; request timeouts are capped by the remaining solve budget. Cleanup is additional: ASTAP gets a 250 ms graceful-stop interval, then forced termination and a bounded confirmation wait.
+- Progress reports real phases and elapsed time, not invented frame counts or completion percentages. Listeners run on the solve worker, must return promptly, and must not call the owning client's `close()`. Listener exceptions stop the solve and still run cleanup.
+- ASTAP completion follows confirmed process exit and output-reader shutdown. Both output streams are merged and drained with bounded retained diagnostics. Existing `.ini`, `.wcs` and annotated JPEG sidecars are backed up before launch; unsuccessful runs remove only their generated outputs and restore those backups. Successful runs replace the old sidecars. Same-stem concurrent solves in this JVM are rejected, including `frame.fit` versus `frame.fits`. Do not run another application against the same output stem concurrently.
+- Cloud cancellation interrupts local HTTP work and stops polling. **It does not cancel a remote job already accepted by Astrometry.net.** No remote cancellation guarantee is made.
+- The custom request is snapshotted, so login and FITS preparation do not mutate the caller's object. Existing numeric-hint and blind-upload visibility defaults are unchanged; use `publicly_visible=n` explicitly for private uploads (as SpacePixels does).
+- Legacy methods remain source-compatible. Cloud preparation failures now arrive asynchronously through the returned future. A legacy future's cancelled `get()` may return before backend cleanup; retain the new operation handle when cleanup-aware cancellation is needed. `cancel(false)` does not interrupt a running worker.
+- Close each cloud client when its session ends. `close()` cancels and joins its operations, shuts down HTTP resources, and joins an owned executor (shared 10-second limit, explicit failure if shutdown cannot be confirmed). Borrowed executors are never shut down; this client's queued operations are still cancelled. Starts after close are rejected.
+
+### Offline contract tests
+
+`test` uses a portable Java child process and a loopback HTTP server. It requires no ASTAP installation, account, external service or uploads of observer data. `AstrometryDotNetConfig.Builder.withServiceBaseUri(URI)` selects a private server or loopback fixture; result links use the same root. Live `integrationTest` remains separate and opt-in.
 
 ## 🛠️ Building JPlateSolve from Source
 

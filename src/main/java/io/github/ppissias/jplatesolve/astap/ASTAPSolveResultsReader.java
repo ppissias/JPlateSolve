@@ -15,6 +15,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
@@ -148,8 +149,7 @@ public class ASTAPSolveResultsReader {
      * @return
      */
     private String getExpectedIniFilename(String fitsFileName) {
-        int lastSepPosition = fitsFileName.lastIndexOf(".");
-        return fitsFileName.substring(0, lastSepPosition) + ".ini";
+        return sidecarPath(fitsFileName, ".ini").toString();
 
     }
 
@@ -160,8 +160,7 @@ public class ASTAPSolveResultsReader {
      * @return
      */
     private String getExpectedAnnotatedFilename(String fitsFileName) {
-        int lastSepPosition = fitsFileName.lastIndexOf(".");
-        return fitsFileName.substring(0, lastSepPosition) + "_annotated.jpg";
+        return sidecarPath(fitsFileName, "_annotated.jpg").toString();
     }
 
     /**
@@ -171,8 +170,15 @@ public class ASTAPSolveResultsReader {
      * @return
      */
     private String getExpectedWCSFilename(String fitsFileName) {
-        int lastSepPosition = fitsFileName.lastIndexOf(".");
-        return fitsFileName.substring(0, lastSepPosition) + ".wcs";
+        return sidecarPath(fitsFileName, ".wcs").toString();
+    }
+
+    static Path sidecarPath(String image, String suffix) {
+        Path source = Path.of(image);
+        String filename = source.getFileName().toString();
+        int extension = filename.lastIndexOf('.');
+        String stem = extension > 0 ? filename.substring(0, extension) : filename;
+        return source.resolveSibling(stem + suffix);
     }
 
     private static Duration sanitizeTimeout(Duration timeout) {

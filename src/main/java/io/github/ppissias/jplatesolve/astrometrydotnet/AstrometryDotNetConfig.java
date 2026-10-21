@@ -1,6 +1,7 @@
 package io.github.ppissias.jplatesolve.astrometrydotnet;
 
 import java.time.Duration;
+import java.net.URI;
 import java.util.concurrent.ExecutorService;
 
 /**
@@ -18,6 +19,7 @@ public class AstrometryDotNetConfig {
     private final Duration solveTimeout;
     private final Duration pollInterval;
     private final ExecutorService executorService;
+    private final URI serviceBaseUri;
 
     private AstrometryDotNetConfig(Builder builder) {
         this.apiKey = builder.apiKey;
@@ -25,6 +27,7 @@ public class AstrometryDotNetConfig {
         this.solveTimeout = builder.solveTimeout;
         this.pollInterval = builder.pollInterval;
         this.executorService = builder.executorService;
+        this.serviceBaseUri = builder.serviceBaseUri;
     }
 
     /**
@@ -56,6 +59,10 @@ public class AstrometryDotNetConfig {
         return executorService;
     }
 
+    public URI getServiceBaseUri() {
+        return serviceBaseUri;
+    }
+
     /**
      * Builder for {@link AstrometryDotNetConfig}.
      */
@@ -65,8 +72,15 @@ public class AstrometryDotNetConfig {
         private Duration solveTimeout;
         private Duration pollInterval;
         private ExecutorService executorService;
+        private URI serviceBaseUri;
 
         private Builder() {
+        }
+
+        /** Overrides the service root, for example for a private server or loopback tests. */
+        public Builder withServiceBaseUri(URI serviceBaseUri) {
+            this.serviceBaseUri = serviceBaseUri;
+            return this;
         }
 
         /**
