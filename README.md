@@ -17,7 +17,7 @@ JPlateSolve supports two completely different backend engines, allowing you to c
 
 * **Java 21 or higher:** 
 * **For Local Solving:** You must have [ASTAP](https://www.hnsky.org/astap.htm) and its star databases (e.g., H18 or V17) installed on the host machine.
-* **For Cloud Solving:** obtain your own [Astrometry.net API key](https://nova.astrometry.net/api_help). The no-argument client's `XXXXXXXX` default is a placeholder, not a working guest key.
+* **For Cloud Solving:** nothing to install. The no-argument client logs in anonymously with the built-in guest key (`XXXXXXXX`), which nova.astrometry.net accepts; that depends on the service continuing to accept it. To solve under your own account, pass your [Astrometry.net API key](https://nova.astrometry.net/api_help) with `new AstrometryDotNet(key)` or `AstrometryDotNetConfig.Builder.withApiKey`. Uploads made with your key show up on your Astrometry.net profile. A blank key falls back to the guest key.
 
 ## 🚀 Quick Start Guide
 
@@ -77,6 +77,7 @@ public class CloudSolverApp {
    public void solveInCloud() throws Exception {
       File targetImage = new File("C:/AstroData/light_frame.fits");
 
+      // Your own API key, or new AstrometryDotNet() for an anonymous login
       try (AstrometryDotNet cloudSolver = new AstrometryDotNet("your-api-key")) {
 
          System.out.println("Uploading image and awaiting blind solve...");
