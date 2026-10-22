@@ -231,7 +231,10 @@ public class AstrometryDotNet implements AutoCloseable {
         LoginResponse result = gson.fromJson(response.body(), LoginResponse.class);
         if (result == null || !"success".equals(result.getStatus())
                 || result.getSession() == null || result.getSession().isBlank()) {
-            throw new IOException("Astrometry.net login failed.");
+            // The server's reason (nova answers "bad apikey" for an unknown key), never the key itself.
+            String reason = result == null ? null : result.getErrormessage();
+            if (reason == null || reason.isBlank()) throw new IOException("Astrometry.net login failed.");
+            throw new IOException("Astrometry.net login failed: " + reason.replace(apiKey, "<api key>"));
         }
         sessionID = result.getSession();
     }

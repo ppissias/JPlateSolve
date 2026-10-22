@@ -32,6 +32,7 @@ public class AstrometryCancellationTest {
     private final AtomicInteger requests = new AtomicInteger();
     private volatile String blockedPath;
     private volatile String jobStatus = "success";
+    private volatile String loginAnswer = "{\"status\":\"success\",\"session\":\"test-session\"}";
     private volatile String uploadJson;
     /** Submission answers served before the job id; empty means the job id at once. */
     private final java.util.Queue<String> submissionStates = new java.util.concurrent.ConcurrentLinkedQueue<>();
@@ -64,7 +65,7 @@ public class AstrometryCancellationTest {
             byte[] input = exchange.getRequestBody().readAllBytes();
             String result;
             switch (path) {
-                case "/api/login" -> result = "{\"status\":\"success\",\"session\":\"test-session\"}";
+                case "/api/login" -> result = loginAnswer;
                 case "/api/upload" -> {
                     uploadJson = new String(input, StandardCharsets.UTF_8);
                     result = "{\"status\":\"success\",\"subid\":42}";
@@ -167,6 +168,28 @@ public class AstrometryCancellationTest {
             assertEquals(String.valueOf(outcome.cause()), PlateSolveOperation.Status.SUCCEEDED, outcome.status());
             assertTrue(outcome.result().getSolveInformation().get("wcs_link").endsWith("/wcs_file/7"));
             assertTrue("every state was polled", submissionStates.isEmpty());
+        }
+    }
+
+    @Test
+    public void aRefusedLoginCarriesTheServersReasonButNeverTheKey() throws Exception {
+        // As nova.astrometry.net refuses an unknown key; the second answer echoes the key to prove it is redacted.
+        loginAnswer = "{\"status\": \"error\", \"errormessage\": \"bad apikey\"}";
+        try (AstrometryDotNet client = client(Duration.ofSeconds(5), null)) {
+            IOException refused = assertThrows(IOException.class, client::login);
+            assertEquals("Astrometry.net login failed: bad apikey", refused.getMessage());
+            var outcome = client.startBlindSolve(image(), null).completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertEquals(PlateSolveOperation.Status.FAILED, outcome.status());
+            assertEquals("Astrometry.net login failed: bad apikey", outcome.cause().getMessage());
+        }
+        loginAnswer = "{\"status\": \"error\", \"errormessage\": \"unknown key loopback-only\"}";
+        try (AstrometryDotNet client = client(Duration.ofSeconds(5), null)) {
+            IOException refused = assertThrows(IOException.class, client::login);
+            assertFalse(refused.getMessage(), refused.getMessage().contains("loopback-only"));
+        }
+        loginAnswer = "{\"status\": \"error\"}";
+        try (AstrometryDotNet client = client(Duration.ofSeconds(5), null)) {
+            assertEquals("Astrometry.net login failed.", assertThrows(IOException.class, client::login).getMessage());
         }
     }
 

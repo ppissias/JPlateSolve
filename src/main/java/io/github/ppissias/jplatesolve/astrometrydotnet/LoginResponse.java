@@ -17,8 +17,10 @@ package io.github.ppissias.jplatesolve.astrometrydotnet;
  */
 public class LoginResponse {
 	private String status;
-	private String message;	
+	private String message;
 	private String session;
+	/** Why a login was refused, e.g. {@code bad apikey}; absent on success. */
+	private String errormessage;
 
 	public String getStatus() {
 		return status;
@@ -38,9 +40,16 @@ public class LoginResponse {
 	public void setSession(String session) {
 		this.session = session;
 	}
+	public String getErrormessage() {
+		return errormessage;
+	}
+	public void setErrormessage(String errormessage) {
+		this.errormessage = errormessage;
+	}
 	@Override
 	public String toString() {
-		return "LoginResponse [status=" + status + ", message=" + message + ", session=" + session + "]";
+		return "LoginResponse [status=" + status + ", message=" + message + ", session=" + session
+				+ ", errormessage=" + errormessage + "]";
 	}
 	
 }
