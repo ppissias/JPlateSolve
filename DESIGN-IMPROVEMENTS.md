@@ -29,8 +29,8 @@ Two checks were executed while reading the code. With Gson 2.13.2, a request obj
 
 | ID | Priority | Status | Design improvement | First useful result |
 |---|---|---|---|---|
-| JP-03 | High | Proposed | Send only the constraints the caller set, and parse sexagesimal signs | A frame with no pointing header is a blind solve. A declination of −0° 30′ stays south of the equator. |
-| JP-04 | High | Proposed | Take the Astrometry.net API key from the caller | Online solving uses the observer's own key. The placeholder constant is retired. |
+| JP-03 | Medium | Proposed | Send only the constraints the caller set, and parse sexagesimal signs | A frame with no pointing header is sent as a blind solve. A declination of −0° 30′ stays south of the equator. |
+| JP-04 | Low | Proposed | Keep the anonymous login, and document it and the caller's key correctly | The README says how anonymous use and a caller's key work. A refused login says why. |
 | JP-06 | Medium | Proposed | Let a known field shorten the search, and size timeouts for a large frame | A 61-megapixel frame can carry a radius, a scale and an upload budget. |
 | JP-07 | Medium | Proposed | One result contract for success, rejection, timeout and cancellation | The application can classify a failure without reading prose, including failures after the upload has started. |
 | JP-08 | Medium | Proposed | Encode the Java target and test the contracts offline | The behaviours above are checked on the declared JDK, without a live call to Astrometry.net. |
@@ -45,11 +45,13 @@ The Astrometry.net upload API uses `center_ra`, `center_dec` and `radius` togeth
 
 [AstrometryDotNet.customSolve](src/main/java/io/github/ppissias/jplatesolve/astrometrydotnet/AstrometryDotNet.java) treats a center of zero as "not set" and may overwrite it from `OBJCTRA` or `OBJCTDEC`. Those keywords are the only header fields read. The parser accepts three numbers separated by spaces. `getDEC` applies the minutes and seconds with the opposite sign only when the degree value is less than zero. For a header value `-0 30 00` or `-00 30 00`, the degree parses as negative zero, the comparison is false, and the result is +0.5° rather than −0.5°. `getRA` converts seconds with the factor 0.00417; 15/3600 is 0.0041666…. At the end of a minute of right ascension the difference is under an arcsecond, which matters little for a hint and is still the wrong factor.
 
-SpacePixels builds the request in `PlateSolveService.solve` with scale 0.1–180°, downsample 2 and radius 10, and leaves the center unset. A frame whose header lacks `OBJCTRA` and `OBJCTDEC`, or writes them with colons or unit letters, is therefore uploaded as a 10° search around RA 0h, Dec 0°. `blindSolve` also sets `publicly_visible` to `y`. SpacePixels does not use `blindSolve`; it sends `n`.
+SpacePixels builds the request in `PlateSolveService.solve` with scale 0.1–180°, downsample 2 and radius 10, and leaves the center unset. A frame whose header lacks `OBJCTRA` and `OBJCTDEC`, or writes them with colons or unit letters, is therefore uploaded with a center of RA 0h, Dec 0° and a radius of 10°. `blindSolve` also sets `publicly_visible` to `y`. SpacePixels does not use `blindSolve`; it sends `n`.
 
 The 1.0.1 cancellation work snapshots the custom request before submitting it; caller mutation is already fixed. Numeric omission and coordinate parsing remain open.
 
-**Risk and proposal.** Most unsolved frames are not in that 10° patch. The service searches there until it fails or the fifteen-minute budget ends, which is the wait in JP-02 spent on a constraint the user did not choose. A field between 0° and −1° declination, written in the usual `-00 30 00` form, is hinted to the northern hemisphere. An explicit center at 0h or on the equator cannot be told from "leave this unset". Sending `positional_error` 0 replaces the server's default of 1.
+**Live test (2026-10-21, before 1.0.1).** The M5 test frame (`L_2020-06-06_…`, site cards blanked in a copy) was uploaded twice with SpacePixels' request and the anonymous key. With its header pointing, the body carried `center_ra` 229.633, `center_dec` 2.067, `radius` 10 and `positional_error` 0, and the frame solved in 15.7 s. With `OBJCTRA` and `OBJCTDEC` blanked, the body carried `center_ra` 0, `center_dec` 0, `radius` 10 and `positional_error` 0. The frame still solved, to the same solution (RA 229.646°, Dec +2.080°, 2.543″/px), in 26.4 s. The zeros are sent as described above, but the server did not confine that search to the origin; why it ignored the zero center is not established. The declination sign was not tested; that needs a southern frame within a degree of the equator.
+
+**Risk and proposal.** The feared failure, a search kept to a 10° patch at the origin until the fifteen-minute budget ends, did not occur in the live test; the cost observed was a slower solve. That outcome depends on server behaviour this library does not control. A field between 0° and −1° declination, written in the usual `-00 30 00` form, is hinted to the northern hemisphere. An explicit center at 0h or on the equator cannot be told from "leave this unset". Sending `positional_error` 0 replaces the server's default of 1.
 
 Use nullable fields, or a builder that records which fields were set. Serialize only those fields. Keep a caller-supplied 0. Treat a missing pointing header as a blind solve: do not send `center_ra`, `center_dec` or `radius`. Parse sexagesimal with an explicit sign, including negative zero hours and degrees, and accept the colon form in common use. Use 15/3600 for right-ascension seconds. Leave the caller's request unchanged; build the submitted copy inside the client. Default `publicly_visible` to `n` on `blindSolve`, and let a caller opt in to a public submission.
 
@@ -59,19 +61,19 @@ SpacePixels should keep sending `n`, scale and downsample. It should send a radi
 
 **Acceptance.** A unit test of the JSON body: omitted center and radius are absent; an explicit 0 is present; `positional_error` is absent unless set. Header fixtures for `12 34 56.7`, `12:34:56.7`, `-00 30 00.0` and a missing keyword. The southern fixture stays negative. A reused request object is unchanged after `customSolve`. `blindSolve` JSON contains `publicly_visible` of `n` unless the caller set `y`.
 
-## JP-04. Take the API key from the caller
+## JP-04. Keep the anonymous login, and document it and the caller's key correctly
 
-**Evidence.** `AstrometryDotNet.DEFAULT_API_KEY` is the literal `XXXXXXXX`, introduced in commit `711bdbe`. The Astrometry.net API documentation uses the same sort of placeholder in its login example. It is not an account key. [README.md](README.md) now warns that the no-argument constructor uses a placeholder, not a working guest key. SpacePixels constructs `new AstrometryDotNet()` and has no API-key field on its application settings. `login` posts that constant. A rejected login fails the asynchronous operation before upload. SpacePixels still needs the configured key and consistent network-failure wording.
+**Evidence (live, 2026-10-21 and 2026-10-22).** `AstrometryDotNet.DEFAULT_API_KEY` is the literal `XXXXXXXX`, introduced in commit `711bdbe`. Nova accepts it as an anonymous login: `{"status": "success", "message": "authenticated user: ", …}`, with an empty user name. A made-up key is refused with `{"status": "error", "errormessage": "bad apikey"}`. With the default key, the M5 test frame solved privately in 15.7 s through 1.0.0's `customSolve` and in 14.1 s through SpacePixels' `PlateSolveService`. On 2026-10-22 the 1.0.1 `login()` again accepted the default key, and refused a made-up key with `IOException("Astrometry.net login failed.")`. An earlier reading of this item treated the constant as a non-working placeholder and online solving as failing at login; the live logins disproved both. The README sentence added with 1.0.1, "a placeholder, not a working guest key", repeats that reading and is wrong.
 
-**Risk and proposal.** Online solving from the application fails at login for every frame. Embedding a working shared key in the jar would put every user on one account and would publish that account's key in source control.
+The library already takes a caller's key: `new AstrometryDotNet(String)` and `AstrometryDotNetConfig.withApiKey`, with a blank key falling back to the guest key. Since 2026-10-21 SpacePixels offers **Anonymous** (the default, which uses the no-argument constructor) or **My API key** on its Astrometry Config tab, with a **Check** that logs in without uploading. Astrometry.net's API help says that uploads made with a user's key show up on that user's web profile. The 1.0.1 cancellation work removed the login JSON/form and raw request/response logging, so the key is no longer logged.
 
-Require a key. A blank key fails in the constructor, or at `login`, with a message that says the key is missing. Remove the placeholder constant and the guest-key sentence from the README. SpacePixels gains a setting on the astrometry page, stored with the other application preferences, and passes it to `AstrometryDotNetConfig`. The cancellation implementation removed login JSON/form and raw request/response logging. Keep that redaction when adding credential validation.
-
-The setting is an application change. It is useful only together with this library change, because today's constructor cannot accept a key without the caller knowing to avoid the no-argument form. The no-argument constructor can remain as a deprecated adapter that fails with the same clear error, so an old call site does not silently keep using `XXXXXXXX`.
+**Risk and proposal.** Requiring a key would break anonymous solving that works today. Keep the guest key and the blank-key fallback. Correct the README: the no-argument client logs in anonymously, which depends on Astrometry.net continuing to accept that key, and a caller can pass its own. A refused login now says only "Astrometry.net login failed."; include the server's `errormessage` (never the key), so a caller can tell a bad key from a service error without guessing. Keep the redaction.
 
 **Review feedback — correction and credential handling.** The current API already accepts a key through both `AstrometryDotNet(String)` and `AstrometryDotNetConfig.Builder.withApiKey`. SpacePixels can adopt either now; requiring a key and removing the misleading guest-key documentation are the library changes. Prefer failing at login for the deprecated no-argument path if offline ASTAP sessions still construct this client eagerly. Redact both login log messages (JSON and form body), plus session tokens in request/response logging and `SubmitFileRequest.toString()`. Test with a log handler that neither a supplied key nor a session token appears. Treat placeholder rejection as an expected failure, not evidence from a live login in this review.
 
-**Acceptance.** Login with an empty key fails before any HTTP call, in a unit test. A test double receives the key the caller supplied. README and the SpacePixels manual describe where the observer gets a key and where it is stored. No key value is added to the repository.
+**Note on the review feedback (live logins, 2026-10-21 and 2026-10-22).** The feedback was written before any live login. The default key is accepted as an anonymous login, so requiring a key, and calling the guest-key documentation misleading, no longer apply. SpacePixels no longer constructs the client eagerly: it makes it at the first online solve. The redaction and log-handler points stand.
+
+**Acceptance.** A test double receives the key the caller supplied, and a blank key logs in with the guest key. A log handler sees neither a supplied key nor a session token. A refused login carries the server's `errormessage`. The README describes the anonymous default and how to pass a key; the SpacePixels manual says where the observer gets a key and where it is stored. No real key value is added to the repository.
 
 
 ## JP-06. Let a known field shorten the search
@@ -106,7 +108,7 @@ Already delivered with 1.0.1: the monotonic total budget includes queue time, lo
 
 ASTAP success uses a null failure reason and the ini's warning. Astrometry.net success uses an empty string for both the failure reason and the warning. The new operation already distinguishes solver rejection, failure, timeout and cancellation with preserved causes. Legacy adapters keep their older result/exception distinction; metadata immutability and normalized strings remain open.
 
-SpacePixels' `astrometryNetFailure` classifier still needs to apply to the full asynchronous operation, including upload and polling, using preserved causes and richer protocol diagnostics.
+Since 2026-10-22 SpacePixels words a failed online solve for the whole asynchronous operation, including upload and polling (`AstrometryNetAccount.failureMessage`, called from `PlateSolveTask`). It works from exception types and messages; preserved causes with categories and richer protocol diagnostics remain open here.
 
 **Risk and proposal.** Two callers can disagree about an empty reason versus a null one. A caller can put entries into a result another viewer still holds. The application's careful network text applies to the start of the solve and not to the long wait.
 
@@ -124,7 +126,7 @@ Keep `PlateSolveResult` and `isSuccess`. Copy the metadata map in the constructo
 
 **Already delivered with 1.0.1 cancellation.** Java toolchain and `--release` are pinned to 21, the README names 1.0.1, and default tests exercise both solver backends with a Java child process and loopback HTTP server. The configurable service root also derives result URLs. See the archive for validation and the jar-only SpacePixels check.
 
-**Still pending.** Add the JP-03/04/07 request, credential and protocol fixtures as those contracts land. Live `integrationTest` must receive an external key and skip before client construction when it is absent. Re-enable doclint for public types, fixing the remaining tags rather than suppressing it permanently. Keep live checks separate from `test` and `check`; offline tests need no external service (loopback networking is still used).
+**Still pending.** Add the JP-03/04/07 request, credential and protocol fixtures as those contracts land. Live `integrationTest` logs in anonymously unless an external key is supplied, and says which it used. Re-enable doclint for public types, fixing the remaining tags rather than suppressing it permanently. Keep live checks separate from `test` and `check`; offline tests need no external service (loopback networking is still used).
 
 ## What SpacePixels does after a library change
 
@@ -133,15 +135,15 @@ SpacePixels already depends on this library for one frame at a time. The applica
 | Library item | Application follow-up | Related application work |
 |---|---|---|
 | JP-03 | Send a radius only with a center the library parsed. Keep `publicly_visible=n`. | `PlateSolveService.solve` |
-| JP-04 | Add the observer's Astrometry.net key to application settings and pass it on the client. | Astrometry configuration page, manual |
+| JP-04 | **Done 2026-10-21, with the current library:** **Anonymous** or **My API key** on Astrometry Config, passed to the client, with a login **Check**. A refused login is named for the account in use. | Astrometry configuration page, manual |
 | JP-06 | Adopt a hinted ASTAP command and a longer upload budget after the timings in JP-06 are written down. | Large-frame plate solve |
-| JP-07 | Classify upload and polling failures with the same categories as login failures. | `astrometryNetFailure`, `showSolveOutcome` |
+| JP-07 | Classify upload and polling failures with the same categories as login failures. The wording already covers the whole operation (2026-10-22); categories follow the library contract. | `AstrometryNetAccount.failureMessage`, `showSolveOutcome` |
 
 Plate solve remains a SpacePixels job. This library does not gain a Swing dialog, a progress window or a FITS writer.
 
 ## Ordering
 
-1. **JP-04 and JP-03.** Configure the observer's key and correct omission/coordinate hint handling; cancellation intentionally leaves these defaults unchanged.
+1. **JP-03 and JP-04.** Correct omission/coordinate hint handling, the README's key sentence and the refused-login message; cancellation intentionally leaves these defaults unchanged. Online solving already works with the anonymous key, and the observer's key is configurable in SpacePixels.
 2. **JP-07.** Normalize metadata and carry structured protocol/error diagnostics through the application.
 3. **JP-06.** Tune large-frame search and upload budgets only after a measured real solve.
 4. **Remaining JP-08 checks.** Add contract fixtures with each change and finish live-test key handling/doclint.
