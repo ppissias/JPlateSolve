@@ -10,6 +10,9 @@
 package io.github.ppissias.jplatesolve.astrometrydotnet;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonParseException;
+import com.google.gson.JsonParser;
 import io.github.ppissias.jplatesolve.PlateSolveResult;
 import io.github.ppissias.jplatesolve.PlateSolveOperation;
 import io.github.ppissias.jplatesolve.PlateSolveOperation.Context;
@@ -354,11 +357,37 @@ public class AstrometryDotNet implements AutoCloseable {
         while (true) {
             HttpResponse<String> response = sendRequest(requestBuilder(SUBMISSION_PROGRESS_URI + submission.getSubid(), context)
                     .GET().build(), context);
-            SubmissionProgressResponse progress = gson.fromJson(response.body(), SubmissionProgressResponse.class);
-            int[] jobs = progress == null ? null : progress.getJobs();
-            if (!response.body().contains("[null]") && jobs != null && jobs.length > 0) return jobs[0];
+            Integer jobID = firstJobId(response.body());
+            if (jobID != null) return jobID;
             context.pause(pollInterval);
         }
+    }
+
+    /**
+     * The submission's first job id, or null while it has none. After an upload Astrometry.net answers
+     * {@code "jobs": []}, then {@code "jobs": [null]}, then the id. Only {@code jobs} is read: the
+     * other id arrays can hold nulls too, which a primitive {@code int[]} cannot.
+     */
+    static Integer firstJobId(String body) throws IOException {
+        JsonElement root;
+        try {
+            root = JsonParser.parseString(body);
+        } catch (JsonParseException malformed) {
+            throw new IOException("Astrometry.net returned an unreadable submission status.", malformed);
+        }
+        if (!root.isJsonObject()) {
+            throw new IOException("Astrometry.net returned an unexpected submission status.");
+        }
+        JsonElement jobs = root.getAsJsonObject().get("jobs");
+        if (jobs == null || !jobs.isJsonArray()) {
+            return null;
+        }
+        for (JsonElement job : jobs.getAsJsonArray()) {
+            if (!job.isJsonNull()) {
+                return job.getAsInt();
+            }
+        }
+        return null;
     }
 
     private JobResultResponse waitForJobResult(int jobID, Context context) throws IOException, InterruptedException {

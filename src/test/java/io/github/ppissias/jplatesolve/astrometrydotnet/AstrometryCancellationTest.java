@@ -33,6 +33,8 @@ public class AstrometryCancellationTest {
     private volatile String blockedPath;
     private volatile String jobStatus = "success";
     private volatile String uploadJson;
+    /** Submission answers served before the job id; empty means the job id at once. */
+    private final java.util.Queue<String> submissionStates = new java.util.concurrent.ConcurrentLinkedQueue<>();
 
     @Before
     public void setup() throws Exception {
@@ -67,7 +69,10 @@ public class AstrometryCancellationTest {
                     uploadJson = new String(input, StandardCharsets.UTF_8);
                     result = "{\"status\":\"success\",\"subid\":42}";
                 }
-                case "/api/submissions/42" -> result = "{\"jobs\":[7]}";
+                case "/api/submissions/42" -> {
+                    String state = submissionStates.poll();
+                    result = state != null ? state : "{\"jobs\":[7]}";
+                }
                 case "/api/jobs/7/info" -> result = "{\"status\":\"" + jobStatus + "\",\"calibration\":{\"ra\":12.5,\"dec\":-7.25}}";
                 default -> result = "{}";
             }
@@ -143,6 +148,35 @@ public class AstrometryCancellationTest {
             assertTrue(uploadJson.contains("\"publicly_visible\":\"n\""));
             assertNull("The caller's request is not mutated", request.getSession());
             assertTrue(outcome.result().getSolveInformation().get("wcs_link").endsWith("/wcs_file/7"));
+        }
+    }
+
+    @Test
+    public void submissionPollWaitsThroughTheEmptyAndNullJobStates() throws Exception {
+        // As nova.astrometry.net answered on 2026-10-21: no job yet, then a null job, then the job id.
+        submissionStates.add("{\"user\": 1000, \"processing_started\": \"2026-10-21 12:39:47.506178+00:00\", "
+                + "\"processing_finished\": \"None\", \"user_images\": [], \"images\": [], \"jobs\": [], \"job_calibrations\": []}");
+        submissionStates.add("{\"user\": 1000, \"processing_started\": \"2026-10-21 12:39:47.506178+00:00\", "
+                + "\"processing_finished\": \"2026-10-21 12:39:48.145917+00:00\", \"user_images\": [16574280], "
+                + "\"images\": [41229374], \"jobs\": [null], \"job_calibrations\": []}");
+        submissionStates.add("{\"user\": 1000, \"processing_started\": \"2026-10-21 12:39:47.506178+00:00\", "
+                + "\"processing_finished\": \"2026-10-21 12:39:48.145917+00:00\", \"user_images\": [16574280], "
+                + "\"images\": [41229374], \"jobs\": [7], \"job_calibrations\": [[7, 13648581]]}");
+        try (AstrometryDotNet client = client(Duration.ofSeconds(5), null)) {
+            var outcome = client.startBlindSolve(image(), null).completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertEquals(String.valueOf(outcome.cause()), PlateSolveOperation.Status.SUCCEEDED, outcome.status());
+            assertTrue(outcome.result().getSolveInformation().get("wcs_link").endsWith("/wcs_file/7"));
+            assertTrue("every state was polled", submissionStates.isEmpty());
+        }
+    }
+
+    @Test
+    public void anUnexpectedSubmissionAnswerFailsWithAReason() throws Exception {
+        submissionStates.add("[\"not an object\"]");
+        try (AstrometryDotNet client = client(Duration.ofSeconds(5), null)) {
+            var outcome = client.startBlindSolve(image(), null).completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertEquals(PlateSolveOperation.Status.FAILED, outcome.status());
+            assertNotNull("the failure says what went wrong", outcome.cause().getMessage());
         }
     }
 
