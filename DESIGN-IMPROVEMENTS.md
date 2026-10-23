@@ -21,7 +21,7 @@ A fresh review of the library (about 2,300 lines of main code and 700 of tests),
 | ID | Change | Priority | Size |
 |---|---|---|---|
 | [JP-09](#jp-09-remove-dead-code) | Remove dead code | High | Small |
-| [JP-10](#jp-10-one-api-style-or-adapters-that-behave-the-same) | One API style, or adapters that behave the same | Medium | Small |
+| [JP-10](#jp-10-one-api-style-the-operation-api) | One API style: the operation API | Medium | Small |
 | [JP-07](#jp-07-a-consistent-result-contract) | A consistent result contract | Medium | Small |
 | [JP-04](#jp-04-redact-session-tokens) | Redact session tokens | Medium | Small |
 | [JP-08](#jp-08-offline-contract-tests-and-javadoc-checks) | Offline contract tests and Javadoc checks | Low | Small |
@@ -30,15 +30,26 @@ A fresh review of the library (about 2,300 lines of main code and 700 of tests),
 
 `SubmissionProgressResponse` is never used: the client reads the submission status through `firstJobId`. `SubmitFileBodyPublisher.buildMultipartData`, the in-memory multipart helper described as a "diagnostic path", has no caller either. Delete both.
 
-### JP-10. One API style, or adapters that behave the same
+### JP-10. One API style: the operation API
 
 **Problem.** Each backend has two entry styles:
 - the operation API: `ASTAPInterface.startSolve`, `AstrometryDotNet.startBlindSolve` and `startCustomSolve`;
 - thin `Future` adapters over it: `ASTAPInterface.solveImage` (two overloads), `AstrometryDotNet.blindSolve` and `customSolve`.
 
-SpacePixels uses only the operation API, and only the live integration tests use the adapters. The adapters also behave differently. `asFuture(failuresAsResults)` is called with `false` for ASTAP and `true` for Astrometry.net, so the same `Future.get()` throws on one backend and returns a failed result on the other.
+SpacePixels uses only the operation API. The adapters are used only by the live integration tests and one unit test of `asFuture`. They also behave differently. `asFuture(failuresAsResults)` is called with `false` for ASTAP and `true` for Astrometry.net, so the same `Future.get()` throws on one backend and returns a failed result on the other.
 
-**Proposal.** If JPlateSolve has no users outside SpacePixels, keep only the operation API, move the integration tests to it, and remove `asFuture`. If it has outside users, keep the adapters but give both backends the same failure behaviour (return a failed result), and say so in the README.
+**Maintainer's answer (2026-10-23).** JPlateSolve has no users outside SpacePixels today, but it was made so that others can use it one day.
+
+**Proposal.** Keep only the operation API:
+- Nobody depends on the adapters yet, so now is the cheapest moment to settle on one style.
+- A future user is better served by one cancellable API than by two that fail differently.
+
+Steps:
+1. Move the integration tests to the operation API.
+2. Remove `asFuture` and the four adapter methods.
+3. Rewrite the README examples around `startSolve`, `startBlindSolve` and `operation.completion()`. They currently start with the adapters.
+
+A blocking call stays one line: `operation.completion().toCompletableFuture().get()`.
 
 ### JP-07. A consistent result contract
 
