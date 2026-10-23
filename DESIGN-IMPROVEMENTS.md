@@ -25,6 +25,7 @@ A fresh review of the library (about 2,300 lines of main code and 700 of tests),
 | [JP-07](#jp-07-a-consistent-result-contract) | A consistent result contract | Medium | Small |
 | [JP-04](#jp-04-redact-session-tokens) | Redact session tokens | Medium | Small |
 | [JP-08](#jp-08-offline-contract-tests-and-javadoc-checks) | Offline contract tests and Javadoc checks | Low | Small |
+| [JP-11](#jp-11-upgrade-the-dependencies) | Upgrade the dependencies | Medium | Small |
 
 ### JP-09. Remove dead code
 
@@ -71,6 +72,16 @@ The Java target (21), the offline tests of both backends and the configurable se
 - add the fixtures of JP-03 (in FEATURE-REQUESTS.md), JP-04 and JP-07 as those changes land;
 - let the live `integrationTest` say whether it logged in anonymously or with a supplied key;
 - re-enable doclint for public types (`build.gradle` sets `Xdoclint:none`), fixing the remaining tags instead of suppressing the check.
+
+### JP-11. Upgrade the dependencies
+
+Part of SpacePixels' [SP-18](../SpacePixels/DESIGN-IMPROVEMENTS.md#sp-18-upgrade-the-dependencies), which holds the version table, the risks and the verification for all three repositories. For JPlateSolve:
+- **Gradle wrapper:** 8.12 to 9.8.2. This is the largest step of the three repositories. Fix the deprecation warnings first (`--warning-mode all`).
+- **nom-tam-fits:** 1.21.2 to 1.23.0. JPlateSolve uses it only in the Astrometry.net client, and the 1.22 to 1.23 changes are about compressed images.
+- **Gson:** 2.13.2 to 2.14.0.
+- **Unchanged:** JUnit stays at 4.13.2, and the release stays at Java 21 for outside users.
+
+The offline tests must pass. Run the live integration tests once.
 
 ## Removed from the previous plan (2026-10-23)
 
