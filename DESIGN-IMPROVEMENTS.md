@@ -18,7 +18,7 @@ Two checks were executed while reading the code. With Gson 2.13.2, a request obj
 ## What to preserve
 
 - **A small engine with two backends and one result.** Callers solve through [ASTAPInterface](src/main/java/io/github/ppissias/jplatesolve/astap/ASTAPInterface.java) or [AstrometryDotNet](src/main/java/io/github/ppissias/jplatesolve/astrometrydotnet/AstrometryDotNet.java) and read a [PlateSolveResult](src/main/java/io/github/ppissias/jplatesolve/PlateSolveResult.java). The library stays free of Swing, FITS writing and session folders. SpacePixels owns the header update and cleanup of successful solver files; JPlateSolve owns rollback of failed or cancelled local solves.
-- **The caller chooses the waiting thread.** Both entry points expose a cleanup-aware operation and retain legacy `Future` adapters. SpacePixels already waits on its plate-solve worker, in [PlateSolveTask](../SpacePixels/src/main/java/eu/startales/spacepixels/tasks/PlateSolveTask.java). Keep that split.
+- **The caller chooses the waiting thread.** Both entry points expose a cleanup-aware operation and retain legacy `Future` adapters. SpacePixels already waits on its plate-solve worker, in [PlateSolveTask](../SpacePixels/src/main/java/eu/startales/spacepixels/tasks/PlateSolveTask.java). Keep that split. *Review note (2026-10-23):* SpacePixels uses only the operation API. Its own unused `Future` wrappers are listed for removal in SpacePixels D14. The library's `Future` adapters matter only to third-party users; they are thin layers over the operation, so keeping them costs little.
 - **The ASTAP launch shape that is already right.** The executable is started with an argument array from the executable's directory, so a path with spaces needs no shell and the star database beside the program can be found. `-wcs` asks for the FITS-shaped header SpacePixels imports.
 - **The streaming upload.** [SubmitFileBodyPublisher.getBodyPublisher](src/main/java/io/github/ppissias/jplatesolve/astrometrydotnet/util/SubmitFileBodyPublisher.java) sends the file from disk. The in-memory multipart helper is a separate diagnostic path. Keep the solve on the streaming path.
 - **Timeouts that a caller can already set.** The ASTAP reader takes a `Duration`. [AstrometryDotNetConfig](src/main/java/io/github/ppissias/jplatesolve/astrometrydotnet/AstrometryDotNetConfig.java) takes a per-request timeout, a solve timeout and a poll interval. The gap is that the defaults, and the SpacePixels call, do not use that room. See JP-02 and JP-06.
@@ -75,6 +75,8 @@ The library already takes a caller's key: `new AstrometryDotNet(String)` and `As
 
 **Acceptance.** A test double receives the key the caller supplied, and a blank key logs in with the guest key. A log handler sees neither a supplied key nor a session token. A refused login carries the server's `errormessage`. The README describes the anonymous default and how to pass a key; the SpacePixels manual says where the observer gets a key and where it is stored. No real key value is added to the repository.
 
+**Review note (2026-10-23).** Little of JP-04 is left: redact the session token in `LoginResponse.toString()` and `SubmitFileRequest.toString()`, and add the log-handler test. The anonymous default, the caller's key, the README and the refused-login reason are done in both repositories. The note above supersedes the review feedback that came before it. Suggest finishing those two points under JP-08 and archiving JP-04.
+
 
 ## JP-06. Let a known field shorten the search
 
@@ -121,6 +123,14 @@ Keep `PlateSolveResult` and `isSuccess`. Copy the metadata map in the constructo
 Since 2026-10-22, `waitForJobId` reads only the `jobs` array, structurally. `[]` and `[null]` mean "not ready yet", and the first non-null id is used. A body that is not a JSON object fails with a reason. This fixed a 1.0.1 regression: the cancellation rewrite parsed the whole status into `int[]` fields before checking for `[null]`, and Gson throws on a null in a primitive array. Live, every online solve then failed with a message-less `IllegalArgumentException` once nova answered `"jobs": [null]`, which it does after each upload. Still open: define how to handle multiple jobs and completed submissions with no job. The [Astrometry.net API](https://astrometry.net/doc/net/api.html) permits zero or more jobs per submission. Fixtures for nova's empty and null job states, as recorded live, and for a non-object answer exist since 2026-10-22. Still to add: multiple jobs, malformed JSON, a missing submission ID and a non-success HTTP status. These are part of the outcome contract, not just message formatting.
 
 **Acceptance.** A successful result from both backends has a null failure reason, and its map rejects modification. A stubbed HTTP timeout, a connection refusal and a solver `"failure"` status produce different categories and preserve the cause. SpacePixels' existing failure-message test grows one case for an error that happens after submission.
+
+**Review note (2026-10-23).** SpacePixels already words every failure from exception types (`AstrometryNetAccount.failureMessage`), and none of its code needs to branch on a category: it has no retry and no fallback. Narrow JP-07 to three things:
+
+- an immutable metadata map;
+- consistent null versus empty strings, keeping real warnings;
+- the remaining protocol fixtures: multiple jobs, malformed JSON, a missing submission ID and an HTTP error status.
+
+Add the category enum when a caller needs to act on it, for example by retrying after a network failure.
 
 ## JP-08. Encode the Java target and test the contracts offline
 
