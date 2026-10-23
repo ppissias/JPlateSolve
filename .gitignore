@@ -12,3 +12,6 @@ gradle.properties
 
 # IntelliJ IDEA project files
 .idea
+
+# Machine-specific paths for developers and agents (see AGENTS.md)
+LOCAL-ENVIRONMENT.txt
