@@ -27,7 +27,7 @@ A fresh review of the library (about 2,300 lines of main code and 700 of tests),
 | [JP-07](#jp-07-a-consistent-result-contract) | A consistent result contract | Medium | Small |
 | [JP-04](#jp-04-redact-session-tokens) | Redact session tokens | Medium | Small |
 | [JP-08](#jp-08-offline-contract-tests-and-javadoc-checks) | Offline contract tests and Javadoc checks | Low | Small |
-| [JP-11](#jp-11-upgrade-the-dependencies) | Upgrade the dependencies | Medium | Small |
+| [JP-14](#jp-14-live-integration-tests-that-upload-privately-and-without-the-site) | Live integration tests that upload privately and without the site | Medium | Small |
 
 ### JP-09. Remove dead code
 
@@ -98,19 +98,16 @@ The Java target (21), the offline tests of both backends and the configurable se
 - Report only whether a key was supplied or anonymous login was used, never its value or the session token. Keep live checks opt-in and sanitize any uploaded copy; doclint and ordinary builds must not trigger uploads.
 - Verify doclint through the actual Javadoc/publication tasks and compile the operation-based README examples after JP-10, so documentation changes remain usable by a consumer.
 
-### JP-11. Upgrade the dependencies
+### JP-14. Live integration tests that upload privately and without the site
 
-Part of SpacePixels' [SP-18](../SpacePixels/DESIGN-IMPROVEMENTS.md#sp-18-upgrade-the-dependencies), which holds the version table, the risks and the verification for all three repositories. For JPlateSolve:
-- **Gradle wrapper:** 8.12 to 9.8.2. This is the largest step of the three repositories. Fix the deprecation warnings first (`--warning-mode all`).
-- **nom-tam-fits:** 1.21.2 to 1.23.0. JPlateSolve uses it only in the Astrometry.net client, and the 1.22 to 1.23 changes are about compressed images.
-- **Gson:** 2.13.2 to 2.14.0.
-- **Unchanged:** JUnit stays at 4.13.2, and the release stays at Java 21 for outside users.
+**Found (2026-10-24)** during the live check of SpacePixels' SP-18. The opt-in `integrationTest` source set uploads the two FITS fixtures as they are, with their `SITELAT`, `SITELONG` and `OBSERVER` cards, and `TestCustomSolve` asks for `publicly_visible=y`. A run therefore publishes a frame and its observing site on nova.astrometry.net. `TestBlindSolve` and `TestBlindSolveFail` go through `blindSolve`, which uploads publicly as well ([JP-12](FEATURE-REQUESTS.md#jp-12-upload-privately-unless-the-caller-asks-otherwise)). The tests also use the `Future` entry points that JP-10 proposes to remove.
 
-The offline tests must pass. Run the live integration tests once.
+**Proposal.**
+- Upload each FITS fixture from a copy made in the test's temporary folder, without `SITELAT`, `SITELONG` and `OBSERVER`, and ask for `publicly_visible=n` in every request.
+- Use the operation API (JP-10), and compare the solutions by their meaning: `m101.jpg` and the 2020-06-06 frame solve near their known centres, and the 2020-06-07 frame does not solve.
+- Keep the tests opt-in.
 
-**Issue review (2026-10-24; evaluate before implementation).**
-- Do not infer that nom-tam-fits is irrelevant because this library does not decode compressed pixels. `AstrometryDotNet.updateFromFitsHeader` parses FITS headers before upload, and SP-18 identifies changed exception handling for malformed numeric headers. Add focused valid/malformed-header fixtures and check how failures reach the operation outcome. Keep the wider compressed-pixel comparison in SpacePixels, where conversion occurs.
-- Recheck versions and release notes when implementing. Keep the wrapper step separate from library changes, verify publication/Javadoc and Java 21 compatibility, and run the offline contracts before sanitized opt-in live checks. Compare live solutions semantically; service responses and timings need not be byte-identical.
+On 2026-10-24 a harness outside the repository did exactly this: the login worked, `m101.jpg` solved at RA 210.94°, Dec +54.20° (M101), the 2020-06-07 frame did not solve, and the custom solve of the 2020-06-06 frame gave RA 229.65°, Dec +2.08° (M5).
 
 ## Removed from the previous plan (2026-10-23)
 
