@@ -25,9 +25,7 @@ A fresh review of the library (about 2,300 lines of main code and 700 of tests),
 | [JP-09](#jp-09-remove-dead-code) | Remove dead code | High | Small |
 | [JP-10](#jp-10-one-api-style-the-operation-api) | One API style: the operation API | Medium | Small |
 | [JP-07](#jp-07-a-consistent-result-contract) | A consistent result contract | Medium | Small |
-| [JP-04](#jp-04-redact-session-tokens) | Redact session tokens | Medium | Small |
 | [JP-08](#jp-08-offline-contract-tests-and-javadoc-checks) | Offline contract tests and Javadoc checks | Low | Small |
-| [JP-14](#jp-14-live-integration-tests-that-upload-privately-and-without-the-site) | Live integration tests that upload privately and without the site | Medium | Small |
 
 ### JP-09. Remove dead code
 
@@ -43,7 +41,7 @@ A fresh review of the library (about 2,300 lines of main code and 700 of tests),
 - the operation API: `ASTAPInterface.startSolve`, `AstrometryDotNet.startBlindSolve` and `startCustomSolve`;
 - thin `Future` adapters over it: `ASTAPInterface.solveImage` (two overloads), `AstrometryDotNet.blindSolve` and `customSolve`.
 
-SpacePixels uses only the operation API. The adapters are used only by the live integration tests and one unit test of `asFuture`. They also behave differently. `asFuture(failuresAsResults)` is called with `false` for ASTAP and `true` for Astrometry.net, so the same `Future.get()` throws on one backend and returns a failed result on the other.
+SpacePixels and the live integration tests use only the operation API. The adapters remain in the README examples and one unit test of `asFuture`. They also behave differently. `asFuture(failuresAsResults)` is called with `false` for ASTAP and `true` for Astrometry.net, so the same `Future.get()` throws on one backend and returns a failed result on the other.
 
 **Maintainer's answer (2026-10-23).** JPlateSolve has no users outside SpacePixels today, but it was made so that others can use it one day.
 
@@ -52,9 +50,8 @@ SpacePixels uses only the operation API. The adapters are used only by the live 
 - A future user is better served by one cancellable API than by two that fail differently.
 
 Steps:
-1. Move the integration tests to the operation API.
-2. Remove `asFuture` and the four adapter methods.
-3. Rewrite the README examples around `startSolve`, `startBlindSolve` and `operation.completion()`. They currently start with the adapters.
+1. Remove `asFuture` and the four adapter methods.
+2. Rewrite the README examples around `startSolve`, `startBlindSolve` and `operation.completion()`. They currently start with the adapters.
 
 A blocking call stays one line: `operation.completion().toCompletableFuture().get()`.
 
@@ -78,36 +75,16 @@ Add a failure-category enum only when a caller needs to act on it, for example t
 - Decide the null contract explicitly. Existing construction paths can supply a null map (including the legacy adapter), and an unconditional `Map.copyOf` would reject it and null entries. Align those paths with JP-10 and document whether absent metadata becomes an empty map or is rejected. Clarify when the documented `source` entry is guaranteed.
 - Normalize absent failure/warning text without discarding a real warning. Keep `REJECTED`, `FAILED`, `TIMED_OUT` and `CANCELLED` outcomes distinct. Multiple-job fixtures should document the current first-non-null job selection; choosing a different successful job would be a protocol policy change, not just a fixture.
 
-### JP-04. Redact session tokens
-
-The anonymous default key, the caller's own key, the README and the reason for a refused login are done. What remains: `LoginResponse.toString()` and `SubmitFileRequest.toString()` print the session token. Redact it, and add a log-handler test that sees neither a key nor a session token.
-
-**Issue review (2026-10-24; evaluate before implementation).**
-- Redact diagnostic representations, not the fields serialized into authenticated requests. Verify the loopback server still receives the expected session token while `toString()` output and captured logs do not contain it.
-- Test both named `toString()` methods directly, as a log-handler test alone could pass when those methods are never logged. Cover success and refused-login/error paths, enabling diagnostic levels where needed, and restore logger handlers/levels after the test. Use synthetic credentials only.
-
 ### JP-08. Offline contract tests and Javadoc checks
 
 The Java target (21), the offline tests of both backends and the configurable service root are done. Still to do:
-- add the fixtures of JP-03 (in FEATURE-REQUESTS.md), JP-04 and JP-07 as those changes land;
-- let the live `integrationTest` say whether it logged in anonymously or with a supplied key;
+- add the protocol fixtures of JP-03 (in FEATURE-REQUESTS.md) and JP-07 as those changes land;
 - re-enable doclint for public types (`build.gradle` sets `Xdoclint:none`), fixing the remaining tags instead of suppressing the check.
 
 **Issue review (2026-10-24; evaluate before implementation).**
 - Extend the existing loopback and process fixtures for public contracts rather than asserting private method structure. Keep deadline accounting, queued cancellation, cleanup failures and borrowed-executor ownership covered alongside protocol errors.
 - Report only whether a key was supplied or anonymous login was used, never its value or the session token. Keep live checks opt-in and sanitize any uploaded copy; doclint and ordinary builds must not trigger uploads.
 - Verify doclint through the actual Javadoc/publication tasks and compile the operation-based README examples after JP-10, so documentation changes remain usable by a consumer.
-
-### JP-14. Live integration tests that upload privately and without the site
-
-**Found (2026-10-24)** during the live check of SpacePixels' SP-18. The opt-in `integrationTest` source set uploads the two FITS fixtures as they are, with their `SITELAT`, `SITELONG` and `OBSERVER` cards, and `TestCustomSolve` asks for `publicly_visible=y`. A run therefore publishes a frame and its observing site on nova.astrometry.net. `TestBlindSolve` and `TestBlindSolveFail` go through `blindSolve`, which uploads publicly as well ([JP-12](FEATURE-REQUESTS.md#jp-12-upload-privately-unless-the-caller-asks-otherwise)). The tests also use the `Future` entry points that JP-10 proposes to remove.
-
-**Proposal.**
-- Upload each FITS fixture from a copy made in the test's temporary folder, without `SITELAT`, `SITELONG` and `OBSERVER`, and ask for `publicly_visible=n` in every request.
-- Use the operation API (JP-10), and compare the solutions by their meaning: `m101.jpg` and the 2020-06-06 frame solve near their known centres, and the 2020-06-07 frame does not solve.
-- Keep the tests opt-in.
-
-On 2026-10-24 a harness outside the repository did exactly this: the login worked, `m101.jpg` solved at RA 210.94°, Dec +54.20° (M101), the 2020-06-07 frame did not solve, and the custom solve of the 2020-06-06 frame gave RA 229.65°, Dec +2.08° (M5).
 
 ## Removed from the previous plan (2026-10-23)
 

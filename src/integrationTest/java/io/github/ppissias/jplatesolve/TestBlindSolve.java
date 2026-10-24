@@ -10,53 +10,30 @@
 
 package io.github.ppissias.jplatesolve;
 
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
-
 import java.io.File;
-import java.io.IOException;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Future;
-import java.util.logging.Handler;
-import java.util.logging.Level;
-import java.util.logging.Logger;
+import java.nio.file.Files;
+import java.util.concurrent.TimeUnit;
 
 import io.github.ppissias.jplatesolve.astrometrydotnet.AstrometryDotNet;
+import org.junit.Rule;
 import org.junit.Test;
-
-import nom.tam.fits.FitsException;
+import org.junit.rules.TemporaryFolder;
 
 /**
- * Please consider when running this test that it will consume CPU time at astrometry.net
- * Only run it if you want to specifically test some settings.
- *
+ * Opt-in private blind solve of M101; consumes processing time at Astrometry.net.
  */
 public class TestBlindSolve {
 
-	@Test public void testFileSubmitRequest() throws IOException, InterruptedException, ExecutionException, FitsException {
-		Logger logger = Logger.getLogger(AstrometryDotNet.class.getName());
-		logger.setLevel(Level.FINEST);
-		for (Handler handler :logger.getHandlers()) {
-			handler.setLevel(Level.FINEST);
-		}
-		logger.getParent().setLevel(Level.FINEST);
-		for (Handler handler :logger.getParent().getHandlers()) {
-			handler.setLevel(Level.FINEST);
-		}
-		Logger.getLogger("jdk").setLevel(Level.WARNING);
-		Logger.getLogger("com").setLevel(Level.WARNING);
+    @Rule public TemporaryFolder folder = new TemporaryFolder();
 
-		try (AstrometryDotNet astrometryLib = new AstrometryDotNet()) {
-			astrometryLib.login();
-			assertNotNull("Received session id", astrometryLib.getSessionID());
-			System.out.println("Logged in with session id:"+astrometryLib.getSessionID());
-
-			File file = new File("src/test/resources/m101.jpg");
-			assertTrue("Test file exists",file.exists());
-
-			Future<PlateSolveResult> solveResult = astrometryLib.blindSolve(file);
-			System.out.println("Solve result: "+solveResult.get().toString());
-			assertTrue("Solve result should be true",solveResult.get().isSuccess());
-		}
-	}
+    /** Solves a temporary JPEG copy privately and checks the known M101 field centre. */
+    @Test
+    public void testFileSubmitRequest() throws Exception {
+        File copy = new File(folder.getRoot(), "solve-upload.jpg");
+        Files.copy(new File("src/test/resources/m101.jpg").toPath(), copy.toPath());
+        try (AstrometryDotNet client = LiveAstrometry.client()) {
+            var outcome = client.startBlindSolve(copy, null).completion().toCompletableFuture().get(16, TimeUnit.MINUTES);
+            LiveAstrometry.assertSolvedNear(outcome, 210.94, 54.20);
+        }
+    }
 }

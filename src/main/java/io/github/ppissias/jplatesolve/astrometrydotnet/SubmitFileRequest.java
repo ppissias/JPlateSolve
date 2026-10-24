@@ -253,9 +253,10 @@ public class SubmitFileRequest {
 	}
 
 
+	/** Returns diagnostic parameters with the authentication token redacted. */
 	@Override
 	public String toString() {
-		return "SubmitFileRequest [session=" + session + ", publicly_visible=" + publicly_visible + ", scale_units="
+		return "SubmitFileRequest [session=<redacted>, publicly_visible=" + publicly_visible + ", scale_units="
 				+ scale_units + ", scale_lower=" + scale_lower + ", scale_upper=" + scale_upper + ", center_ra="
 				+ center_ra + ", center_dec=" + center_dec + ", radius=" + radius + ", downsample_factor="
 				+ downsample_factor + ", positional_error=" + positional_error + "]";

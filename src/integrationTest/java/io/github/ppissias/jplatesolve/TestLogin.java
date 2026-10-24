@@ -12,33 +12,19 @@ package io.github.ppissias.jplatesolve;
 import static org.junit.Assert.assertNotNull;
 
 import java.io.IOException;
-import java.util.logging.Handler;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 
 import io.github.ppissias.jplatesolve.astrometrydotnet.AstrometryDotNet;
 import org.junit.Test;
 
 
+/** Verifies an opt-in live login without printing credentials or changing global logging. */
 public class TestLogin {
 
+	/** Checks that authentication produces a session while reporting only the account mode. */
 	@Test public void testLogin() throws IOException, InterruptedException {
-		Logger logger = Logger.getLogger(AstrometryDotNet.class.getName());
-		logger.setLevel(Level.FINEST);
-		for (Handler handler :logger.getHandlers()) {
-			handler.setLevel(Level.FINEST);
-		}
-		logger.getParent().setLevel(Level.FINEST);
-		for (Handler handler :logger.getParent().getHandlers()) {
-			handler.setLevel(Level.FINEST);
-		}
-		Logger.getLogger("jdk").setLevel(Level.WARNING);
-		Logger.getLogger("com").setLevel(Level.WARNING);
-
-		try (AstrometryDotNet astrometryLib = new AstrometryDotNet()) {
+		try (AstrometryDotNet astrometryLib = LiveAstrometry.client()) {
 			astrometryLib.login();
 			assertNotNull("Received session id", astrometryLib.getSessionID());
-			System.out.println("Logged in with session id:"+astrometryLib.getSessionID());
 		}
 	}
 }

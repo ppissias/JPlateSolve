@@ -8,7 +8,6 @@ A request is a proposal until the maintainer decides on it. When one is implemen
 |---|---|---|
 | [JP-03](#jp-03-send-only-the-constraints-the-caller-set) | Send only the constraints the caller set, and parse sexagesimal signs | Medium |
 | [JP-06](#jp-06-let-a-known-field-shorten-the-search) | Let a known field shorten the search, and size timeouts for large frames | Medium |
-| [JP-12](#jp-12-upload-privately-unless-the-caller-asks-otherwise) | Upload privately unless the caller asks otherwise | High |
 | [JP-13](#jp-13-say-why-an-unreadable-fits-file-cannot-be-solved) | Say why an unreadable FITS file cannot be solved | Low |
 
 ## JP-03. Send only the constraints the caller set
@@ -25,7 +24,6 @@ SpacePixels sends scale 0.1–180°, downsample 2 and radius 10, without a cente
 - Parse sexagesimal with an explicit sign, including negative zero, and accept the colon form. Use 15/3600 for right-ascension seconds.
 - Reject invalid explicit values with a clear error. A malformed header hint falls back to a blind solve.
 - Build the submitted copy inside the client, leaving the caller's request unchanged.
-- Default `publicly_visible` to `n` on `blindSolve`.
 - Keep the primitive getters and add presence methods, or introduce a new request type, so compiled callers keep working.
 
 **Acceptance.**
@@ -53,17 +51,6 @@ SpacePixels sends scale 0.1–180°, downsample 2 and radius 10, without a cente
 - One real frame, solved with and without a hint, with wall times recorded, before SpacePixels' defaults change.
 
 **SpacePixels follow-up.** Adopt a hinted ASTAP command and a longer upload budget after the timings are written down.
-
-## JP-12. Upload privately unless the caller asks otherwise
-
-**Found (2026-10-24).** `AstrometryDotNet.blindSolve` and `startBlindSolve` always send `publicly_visible=y`, so every blind solve publishes the uploaded image on nova.astrometry.net. A FITS upload carries its whole header, including any observing site (`SITELAT`, `SITELONG`) and observer. `customSolve` sends whatever the caller set, and nothing when the caller set nothing. SpacePixels is not affected: it always asks for `publicly_visible=n`. Outside users of the library are.
-
-**Proposal.**
-- Upload privately by default, in the blind solve and whenever the caller did not choose.
-- Let the caller ask for a public upload explicitly, and say in the README what a public upload shares.
-- Test the default with the loopback HTTP stub: a blind solve and a custom solve without a choice both send `publicly_visible=n`.
-
-**SpacePixels follow-up.** None; it already asks for private uploads.
 
 ## JP-13. Say why an unreadable FITS file cannot be solved
 

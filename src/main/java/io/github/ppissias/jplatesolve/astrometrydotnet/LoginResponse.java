@@ -46,9 +46,10 @@ public class LoginResponse {
 	public void setErrormessage(String errormessage) {
 		this.errormessage = errormessage;
 	}
+	/** Returns diagnostic fields with the authentication token redacted. */
 	@Override
 	public String toString() {
-		return "LoginResponse [status=" + status + ", message=" + message + ", session=" + session
+		return "LoginResponse [status=" + status + ", message=" + message + ", session=<redacted>"
 				+ ", errormessage=" + errormessage + "]";
 	}
 	

@@ -9,6 +9,7 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 import java.io.File;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.net.InetSocketAddress;
@@ -21,8 +22,14 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import java.util.logging.SimpleFormatter;
+import java.util.logging.StreamHandler;
 import static org.junit.Assert.*;
 
+/** Exercises cloud operation contracts against an offline HTTP server with synthetic credentials. */
 public class AstrometryCancellationTest {
     @Rule public TemporaryFolder folder = new TemporaryFolder();
     private HttpServer server;
@@ -34,6 +41,7 @@ public class AstrometryCancellationTest {
     private volatile String jobStatus = "success";
     private volatile String loginAnswer = "{\"status\":\"success\",\"session\":\"test-session\"}";
     private volatile String uploadJson;
+    private volatile String loginBody;
     /** Submission answers served before the job id; empty means the job id at once. */
     private final java.util.Queue<String> submissionStates = new java.util.concurrent.ConcurrentLinkedQueue<>();
 
@@ -65,7 +73,10 @@ public class AstrometryCancellationTest {
             byte[] input = exchange.getRequestBody().readAllBytes();
             String result;
             switch (path) {
-                case "/api/login" -> result = loginAnswer;
+                case "/api/login" -> {
+                    loginBody = new String(input, StandardCharsets.UTF_8);
+                    result = loginAnswer;
+                }
                 case "/api/upload" -> {
                     uploadJson = new String(input, StandardCharsets.UTF_8);
                     result = "{\"status\":\"success\",\"subid\":42}";
@@ -168,6 +179,102 @@ public class AstrometryCancellationTest {
             assertTrue(uploadJson.contains("\"publicly_visible\":\"n\""));
             assertNull("The caller's request is not mutated", request.getSession());
             assertTrue(outcome.result().getSolveInformation().get("wcs_link").endsWith("/wcs_file/7"));
+        }
+    }
+
+    /** Blind uploads request private visibility without changing authentication. */
+    @Test
+    public void blindUploadsArePrivateByDefault() throws Exception {
+        try (AstrometryDotNet client = client(Duration.ofSeconds(5), null)) {
+            var outcome = client.startBlindSolve(image(), null).completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertEquals(String.valueOf(outcome.cause()), PlateSolveOperation.Status.SUCCEEDED, outcome.status());
+            assertTrue(uploadJson.contains("\"publicly_visible\":\"n\""));
+            assertTrue(uploadJson.contains("\"session\":\"test-session\""));
+        }
+    }
+
+    /** Missing and blank visibility default to private only in the detached request. */
+    @Test
+    public void customUploadsDefaultToPrivateWithoutMutatingTheCaller() throws Exception {
+        try (AstrometryDotNet client = client(Duration.ofSeconds(5), null)) {
+            for (String visibility : new String[]{null, "", " "}) {
+                SubmitFileRequest request = SubmitFileRequest.builder().withPublicly_visible(visibility).build();
+                var outcome = client.startCustomSolve(image(), request, null).completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+                assertEquals(String.valueOf(outcome.cause()), PlateSolveOperation.Status.SUCCEEDED, outcome.status());
+                assertTrue(uploadJson.contains("\"publicly_visible\":\"n\""));
+                assertEquals(visibility, request.getPublicly_visible());
+                assertNull(request.getSession());
+            }
+        }
+    }
+
+    /** An explicit public upload remains available without mutating the caller's parameters. */
+    @Test
+    public void customUploadsPreserveExplicitPublicVisibility() throws Exception {
+        try (AstrometryDotNet client = client(Duration.ofSeconds(5), null)) {
+            SubmitFileRequest request = SubmitFileRequest.builder().withPublicly_visible("y").build();
+            var outcome = client.startCustomSolve(image(), request, null).completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertEquals(String.valueOf(outcome.cause()), PlateSolveOperation.Status.SUCCEEDED, outcome.status());
+            assertTrue(uploadJson.contains("\"publicly_visible\":\"y\""));
+            assertEquals("y", request.getPublicly_visible());
+            assertNull(request.getSession());
+        }
+    }
+
+    /** Invalid null parameters retain their asynchronous operation failure without sending an upload. */
+    @Test
+    public void nullCustomParametersStillFailInsideTheOperation() throws Exception {
+        try (AstrometryDotNet client = client(Duration.ofSeconds(5), null)) {
+            var operation = client.startCustomSolve(image(), null, null);
+            var outcome = operation.completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertEquals(PlateSolveOperation.Status.FAILED, outcome.status());
+            assertTrue(outcome.cause() instanceof NullPointerException);
+            assertEquals(0, requests.get());
+        }
+    }
+
+    /** Fine-grained diagnostics contain no credentials during success, solver rejection or refused login. */
+    @Test
+    public void diagnosticLogsNeverContainAuthenticationCredentials() throws Exception {
+        Logger logger = Logger.getLogger(AstrometryDotNet.class.getName());
+        Level previousLevel = logger.getLevel();
+        boolean previousUseParentHandlers = logger.getUseParentHandlers();
+        Handler[] previousHandlers = logger.getHandlers();
+        ByteArrayOutputStream captured = new ByteArrayOutputStream();
+        StreamHandler handler = new StreamHandler(captured, new SimpleFormatter());
+        handler.setLevel(Level.ALL);
+        for (Handler previous : previousHandlers) logger.removeHandler(previous);
+        logger.addHandler(handler);
+        logger.setUseParentHandlers(false);
+        logger.setLevel(Level.FINEST);
+        try {
+            try (AstrometryDotNet client = client(Duration.ofSeconds(5), null)) {
+                var outcome = client.startBlindSolve(image(), null).completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+                assertEquals(PlateSolveOperation.Status.SUCCEEDED, outcome.status());
+                assertTrue(loginBody.contains("loopback-only"));
+                assertTrue(uploadJson.contains("test-session"));
+                jobStatus = "failure";
+                outcome = client.startBlindSolve(image(), null).completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+                assertEquals(PlateSolveOperation.Status.REJECTED, outcome.status());
+            }
+            loginAnswer = "{\"status\":\"error\",\"errormessage\":\"unknown key loopback-only\"}";
+            try (AstrometryDotNet client = client(Duration.ofSeconds(5), null)) {
+                var outcome = client.startBlindSolve(image(), null).completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+                assertEquals(PlateSolveOperation.Status.FAILED, outcome.status());
+                logger.log(Level.FINE, "Login refused", outcome.cause());
+            }
+            handler.flush();
+            String diagnostics = captured.toString(StandardCharsets.UTF_8);
+            assertTrue("Diagnostic logging must be exercised", diagnostics.contains("Image solving"));
+            assertTrue(diagnostics.contains("Login refused"));
+            assertFalse(diagnostics.contains("loopback-only"));
+            assertFalse(diagnostics.contains("test-session"));
+        } finally {
+            handler.close();
+            logger.removeHandler(handler);
+            for (Handler previous : previousHandlers) logger.addHandler(previous);
+            logger.setLevel(previousLevel);
+            logger.setUseParentHandlers(previousUseParentHandlers);
         }
     }
 

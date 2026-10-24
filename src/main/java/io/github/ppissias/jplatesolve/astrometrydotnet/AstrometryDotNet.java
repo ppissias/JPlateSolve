@@ -249,14 +249,21 @@ public class AstrometryDotNet implements AutoCloseable {
         return startCustomSolve(imageFile, parameters, null).asFuture(true);
     }
 
+    /** Starts a blind solve with a private upload; use a custom request to opt into public visibility. */
     public PlateSolveOperation startBlindSolve(File imageFile, Consumer<PlateSolveOperation.Progress> progress) {
-        return startCustomSolve(imageFile, SubmitFileRequest.builder().withPublicly_visible("y").build(), progress);
+        return startCustomSolve(imageFile, SubmitFileRequest.builder().withPublicly_visible("n").build(), progress);
     }
 
-    /** Cancellation stops local requests and polling, not a remote job already accepted by Astrometry.net. */
+    /**
+     * Starts a solve with detached parameters, defaulting absent or blank visibility to a private upload.
+     * Cancellation stops local requests and polling, not a remote job already accepted by Astrometry.net.
+     */
     public PlateSolveOperation startCustomSolve(File imageFile, SubmitFileRequest parameters,
                                                 Consumer<PlateSolveOperation.Progress> progress) {
         SubmitFileRequest snapshot = gson.fromJson(gson.toJson(parameters), SubmitFileRequest.class);
+        if (snapshot != null && (snapshot.getPublicly_visible() == null || snapshot.getPublicly_visible().isBlank())) {
+            snapshot.setPublicly_visible("n");
+        }
         synchronized (lifecycle) {
             if (closed) throw new IllegalStateException("Astrometry.net client is closed.");
             PlateSolveOperation operation = PlateSolveOperation.start(solveTimeout, progress, executor, context -> {

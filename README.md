@@ -19,6 +19,12 @@ JPlateSolve supports two completely different backend engines, allowing you to c
 * **For Local Solving:** You must have [ASTAP](https://www.hnsky.org/astap.htm) and its star databases (e.g., H18 or V17) installed on the host machine.
 * **For Cloud Solving:** nothing to install. The no-argument client logs in anonymously with the built-in guest key (`XXXXXXXX`), which nova.astrometry.net accepts; that depends on the service continuing to accept it. To solve under your own account, pass your [Astrometry.net API key](https://nova.astrometry.net/api_help) with `new AstrometryDotNet(key)` or `AstrometryDotNetConfig.Builder.withApiKey`. Uploads made with your key show up on your Astrometry.net profile. A blank key falls back to the guest key.
 
+### Upload privacy
+
+Blind solves upload privately (`publicly_visible=n`). Custom solves also default to private when visibility is absent or blank, including through the legacy `Future` methods. To publish an upload deliberately, pass `SubmitFileRequest.builder().withPublicly_visible("y").build()` to a custom solve. A public upload shares the image and its FITS metadata on Astrometry.net.
+
+Private visibility does not remove metadata from the file. The anonymous login uses a shared account whose other users can see its jobs. Remove observing-site and observer information from a temporary copy before uploading sensitive FITS images, as SpacePixels does. JPlateSolve uploads the file supplied by its caller; it does not sanitize or modify that original. Diagnostic `toString()` values redact session tokens while authentication payloads retain them.
+
 ## 🚀 Quick Start Guide
 
 ### 1. Add to your project
@@ -120,13 +126,17 @@ PlateSolveOperation.Outcome outcome = operation.completion().toCompletableFuture
 - Progress reports real phases and elapsed time, not invented frame counts or completion percentages. Listeners run on the solve worker, must return promptly, and must not call the owning client's `close()`. Listener exceptions stop the solve and still run cleanup.
 - ASTAP completion follows confirmed process exit and output-reader shutdown. Both output streams are merged and drained with bounded retained diagnostics. Existing `.ini`, `.wcs` and annotated JPEG sidecars are backed up before launch; unsuccessful runs remove only their generated outputs and restore those backups. Successful runs replace the old sidecars. Same-stem concurrent solves in this JVM are rejected, including `frame.fit` versus `frame.fits`. Do not run another application against the same output stem concurrently.
 - Cloud cancellation interrupts local HTTP work and stops polling. **It does not cancel a remote job already accepted by Astrometry.net.** No remote cancellation guarantee is made.
-- The custom request is snapshotted, so login and FITS preparation do not mutate the caller's object. Existing numeric-hint and blind-upload visibility defaults are unchanged; use `publicly_visible=n` explicitly for private uploads (as SpacePixels does).
+- The custom request is snapshotted, so login, FITS preparation and the default private visibility do not mutate the caller's object. Existing numeric-hint defaults are unchanged.
 - Legacy methods remain source-compatible. Cloud preparation failures now arrive asynchronously through the returned future. A legacy future's cancelled `get()` may return before backend cleanup; retain the new operation handle when cleanup-aware cancellation is needed. `cancel(false)` does not interrupt a running worker.
 - Close each cloud client when its session ends. `close()` cancels and joins its operations, shuts down HTTP resources, and joins an owned executor (shared 10-second limit, explicit failure if shutdown cannot be confirmed). Borrowed executors are never shut down; this client's queued operations are still cancelled. Starts after close are rejected.
 
 ### Offline contract tests
 
 `test` uses a portable Java child process and a loopback HTTP server. It requires no ASTAP installation, account, external service or uploads of observer data. `AstrometryDotNetConfig.Builder.withServiceBaseUri(URI)` selects a private server or loopback fixture; result links use the same root. Live `integrationTest` remains separate and opt-in.
+
+The offline suite checks private defaults, explicit public opt-in, request isolation and credential-free diagnostics with synthetic credentials. It also verifies the live-test FITS-copy helper on multiple HDUs and both real fixtures, preserving image samples and pointing hints without changing the originals.
+
+Live tests upload temporary copies with neutral names. Every FITS header has observing-site and observer cards removed; checksum cards are also removed from the rewritten copies. All uploads are private. Tests use the operation API, require M101 and M5 solutions near their known centres, and distinguish an unsolvable fixture (`REJECTED`) from transport failure or timeout. Set the optional `ASTROMETRY_API_KEY` environment variable to use your own account; tests report only whether the login is anonymous or uses a supplied key, never the key or session token. They do not change global logging settings.
 
 ## 🛠️ Building JPlateSolve from Source
 

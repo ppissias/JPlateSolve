@@ -9,55 +9,32 @@
  */
 package io.github.ppissias.jplatesolve;
 
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
-
 import java.io.File;
-import java.io.IOException;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Future;
-import java.util.logging.Handler;
-import java.util.logging.Level;
-import java.util.logging.Logger;
+import java.util.concurrent.TimeUnit;
 
 import io.github.ppissias.jplatesolve.astrometrydotnet.AstrometryDotNet;
 import io.github.ppissias.jplatesolve.astrometrydotnet.SubmitFileRequest;
+import org.junit.Rule;
 import org.junit.Test;
-
-import nom.tam.fits.FitsException;
+import org.junit.rules.TemporaryFolder;
 
 /**
- * Please consider when running this test that it will consume CPU time at astrometry.net
- * Only run it if you want to specifically test some settings.
- *
+ * Opt-in private custom solve of a sanitized M5 fixture; consumes processing time at Astrometry.net.
  */
 public class TestCustomSolve {
 
-	@Test public void testFileSubmitRequest() throws IOException, InterruptedException, ExecutionException, FitsException {
-		Logger logger = Logger.getLogger(AstrometryDotNet.class.getName());
-		logger.setLevel(Level.FINEST);
-		for (Handler handler :logger.getHandlers()) {
-			handler.setLevel(Level.FINEST);
-		}
-		logger.getParent().setLevel(Level.FINEST);
-		for (Handler handler :logger.getParent().getHandlers()) {
-			handler.setLevel(Level.FINEST);
-		}
-		Logger.getLogger("jdk").setLevel(Level.WARNING);
-		Logger.getLogger("com").setLevel(Level.WARNING);
+    @Rule public TemporaryFolder folder = new TemporaryFolder();
 
-		try (AstrometryDotNet astrometryLib = new AstrometryDotNet()) {
-			astrometryLib.login();
-			assertNotNull("Received session id", astrometryLib.getSessionID());
-			System.out.println("Logged in with session id:"+astrometryLib.getSessionID());
-
-			File fitsFileForCustomSolve = new File("src/test/resources/L_2020-06-06_22-05-32_Bin1x1_120s__10C.fit");
-			assertTrue("Test file exists",fitsFileForCustomSolve.exists());
-			SubmitFileRequest customSolveParameters = SubmitFileRequest.builder().withPublicly_visible("y").withScale_units("degwidth")
-					.withScale_lower(0.1f).withScale_upper(180.0f).withDownsample_factor(2f).withRadius(1.0f).build();
-			Future<PlateSolveResult> solveResult = astrometryLib.customSolve(fitsFileForCustomSolve, customSolveParameters);
-			System.out.println("Solve result: "+solveResult.get().toString());
-			assertTrue("Solve result should be true",solveResult.get().isSuccess());
-		}
-	}
+    /** Solves a sanitized copy privately and checks the known M5 field centre. */
+    @Test
+    public void testFileSubmitRequest() throws Exception {
+        File copy = SanitizedFitsCopy.create(
+                new File("src/test/resources/L_2020-06-06_22-05-32_Bin1x1_120s__10C.fit"), folder.getRoot());
+        SubmitFileRequest parameters = SubmitFileRequest.builder().withPublicly_visible("n").withScale_units("degwidth")
+                .withScale_lower(0.1f).withScale_upper(180.0f).withDownsample_factor(2f).withRadius(1.0f).build();
+        try (AstrometryDotNet client = LiveAstrometry.client()) {
+            var outcome = client.startCustomSolve(copy, parameters, null).completion().toCompletableFuture().get(16, TimeUnit.MINUTES);
+            LiveAstrometry.assertSolvedNear(outcome, 229.65, 2.08);
+        }
+    }
 }
