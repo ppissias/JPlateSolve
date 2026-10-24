@@ -203,8 +203,8 @@ tasks.register('mavenCentralBundle') {
 }
 
 dependencies {	
-	implementation 'gov.nasa.gsfc.heasarc:nom-tam-fits:1.21.2'
-	implementation 'com.google.code.gson:gson:2.13.2'
+	implementation 'gov.nasa.gsfc.heasarc:nom-tam-fits:1.23.0'
+	implementation 'com.google.code.gson:gson:2.14.0'
 
     // Use JUnit test framework
     testImplementation 'junit:junit:4.13.2'
