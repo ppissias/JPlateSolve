@@ -97,6 +97,25 @@ public class AstrometryCancellationTest {
         return image;
     }
 
+    /**
+     * A 4 x 4 16-bit FITS image whose primary header has {@code naxis1} as NAXIS1, written as it stands, and then
+     * {@code cards}; written byte by byte so that values breaking the FITS rules reach the file.
+     */
+    private File fits(String naxis1, String... cards) throws Exception {
+        StringBuilder header = new StringBuilder();
+        java.util.List<String> all = new java.util.ArrayList<>(java.util.List.of("SIMPLE  =                    T",
+                "BITPIX  =                   16", "NAXIS   =                    2",
+                "NAXIS1  = " + String.format("%20s", naxis1), "NAXIS2  =                    4"));
+        all.addAll(java.util.List.of(cards));
+        all.add("END");
+        for (String card : all) header.append(String.format("%-80s", card));
+        while (header.length() % 2880 != 0) header.append(' ');
+        File image = Files.createTempFile(folder.getRoot().toPath(), "image-", ".fit").toFile();
+        byte[] bytes = header.toString().getBytes(StandardCharsets.US_ASCII);
+        Files.write(image.toPath(), java.util.Arrays.copyOf(bytes, bytes.length + 2880));
+        return image;
+    }
+
     private void cancelAt(String path, File image) throws Exception {
         blockedPath = path;
         try (AstrometryDotNet client = client(Duration.ofSeconds(10), null)) {
@@ -201,6 +220,45 @@ public class AstrometryCancellationTest {
             assertEquals(PlateSolveOperation.Status.FAILED, outcome.status());
             assertNotNull("the failure says what went wrong", outcome.cause().getMessage());
         }
+    }
+
+    /** OBJCTRA and OBJCTDEC of a FITS header become the search centre of a request that has none. */
+    @Test
+    public void fitsObjectCoordinatesBecomeTheSearchCentre() throws Exception {
+        File image = fits("4", "OBJCTRA = '12 30 00'", "OBJCTDEC= '+41 15 00'");
+        try (AstrometryDotNet client = client(Duration.ofSeconds(5), null)) {
+            var outcome = client.startBlindSolve(image, null).completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertEquals(String.valueOf(outcome.cause()), PlateSolveOperation.Status.SUCCEEDED, outcome.status());
+        }
+        assertTrue(uploadJson, uploadJson.contains("\"center_ra\":187.5"));
+        assertTrue(uploadJson, uploadJson.contains("\"center_dec\":41.25"));
+    }
+
+    /**
+     * Header values that break the FITS number rules, or object coordinates that cannot be read, leave the request
+     * as it is and the solve goes ahead; the header is read as text, so no number is parsed there.
+     */
+    @Test
+    public void malformedHeaderValuesLeaveTheRequestUnchanged() throws Exception {
+        File image = fits("4x", "BSCALE  =                1.0.0", "OBJCTRA = '12h30m'");
+        try (AstrometryDotNet client = client(Duration.ofSeconds(5), null)) {
+            var outcome = client.startBlindSolve(image, null).completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertEquals(String.valueOf(outcome.cause()), PlateSolveOperation.Status.SUCCEEDED, outcome.status());
+        }
+        assertTrue(uploadJson, uploadJson.contains("\"center_ra\":0.0"));
+    }
+
+    /** A file named as FITS whose header cannot be read fails the solve with a cause, before anything is uploaded. */
+    @Test
+    public void anUnreadableFitsFileFailsBeforeUploading() throws Exception {
+        File image = Files.createTempFile(folder.getRoot().toPath(), "image-", ".fit").toFile();
+        Files.writeString(image.toPath(), String.format("%-80s", "SIMPLE  =                    T").substring(0, 40));
+        try (AstrometryDotNet client = client(Duration.ofSeconds(5), null)) {
+            var outcome = client.startBlindSolve(image, null).completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertEquals(PlateSolveOperation.Status.FAILED, outcome.status());
+            assertNotNull(outcome.cause());
+        }
+        assertNull("nothing is uploaded", uploadJson);
     }
 
     @Test
