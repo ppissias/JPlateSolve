@@ -35,18 +35,17 @@ public class ASTAPInterface {
     private static final AtomicInteger WORKERS = new AtomicInteger();
     private static final Set<Path> ACTIVE_STEMS = ConcurrentHashMap.newKeySet();
 
+    /** Starts the prepared production command; the solve retains ownership of the returned process. */
     @FunctionalInterface
     interface ProcessLauncher {
-        Process start(File executable, String image) throws IOException;
+        /** Launches a configured process, with its source path kept as one argument. */
+        Process start(ProcessBuilder builder) throws IOException;
     }
 
+    /** Starts a whole-sky, automatic-scale solve from a fixed origin, without generating an annotated JPEG. */
     public static PlateSolveOperation startSolve(File executable, String image, Duration timeout,
                                                  Consumer<PlateSolveOperation.Progress> progress) {
-        return startSolve(executable, image, timeout, progress, (program, source) ->
-                new ProcessBuilder(program.getAbsolutePath(), "-f", source, "-r", "360",
-                        "-z", "0", "-fov", "0", "-wcs", "-annotate")
-                        .directory(program.getAbsoluteFile().getParentFile())
-                        .redirectErrorStream(true).start());
+        return startSolve(executable, image, timeout, progress, ProcessBuilder::start);
     }
 
     static PlateSolveOperation startSolve(File executable, String image, Duration timeout,
@@ -72,7 +71,9 @@ public class ASTAPInterface {
             context.onCleanup(outcome -> process.close());
             files.prepare();
             context.report(Phase.LAUNCHING, "Starting ASTAP");
-            process.process = launcher.start(executable, source.toString());
+            process.process = launcher.start(new ProcessBuilder(executable.getAbsolutePath(), "-f", source.toString(),
+                    "-ra", "0", "-spd", "90", "-r", "180", "-z", "0", "-fov", "0", "-wcs")
+                    .directory(executable.getAbsoluteFile().getParentFile()).redirectErrorStream(true));
             process.startDrainer();
             context.report(Phase.SOLVING, "ASTAP is solving");
             while (!process.process.waitFor(Math.min(100, Math.max(1, context.remaining().toMillis())), TimeUnit.MILLISECONDS)) {
@@ -103,8 +104,7 @@ public class ASTAPInterface {
         private SolveFiles(String image, Path stem) {
             this.stem = stem;
             this.outputs = List.of(ASTAPSolveResultsReader.sidecarPath(image, ".ini"),
-                    ASTAPSolveResultsReader.sidecarPath(image, ".wcs"),
-                    ASTAPSolveResultsReader.sidecarPath(image, "_annotated.jpg"));
+                    ASTAPSolveResultsReader.sidecarPath(image, ".wcs"));
         }
 
         private void prepare() throws IOException {

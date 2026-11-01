@@ -37,7 +37,7 @@ public class ASTAPSolveResultsReaderTest {
         assertTrue(result.isSuccess());
         assertEquals("Minor warning", result.getWarning());
         assertEquals("astap", result.getSolveInformation().get("source"));
-        assertEquals(expectedPath(imageFile, "_annotated.jpg"), result.getSolveInformation().get("annotated_image_link"));
+        assertFalse(result.getSolveInformation().containsKey("annotated_image_link"));
         assertEquals(expectedPath(imageFile, ".wcs"), result.getSolveInformation().get("wcs_link"));
     }
 

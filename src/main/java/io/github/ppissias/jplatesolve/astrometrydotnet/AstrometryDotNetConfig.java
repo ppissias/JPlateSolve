@@ -15,7 +15,10 @@ import java.util.concurrent.ExecutorService;
 public class AstrometryDotNetConfig {
 
     private final String apiKey;
-    private final Duration requestTimeout;
+    private final Duration connectTimeout;
+    private final Duration uploadTimeout;
+    private final Duration statusTimeout;
+    private final boolean publiclyVisible;
     private final Duration solveTimeout;
     private final Duration pollInterval;
     private final ExecutorService executorService;
@@ -23,7 +26,10 @@ public class AstrometryDotNetConfig {
 
     private AstrometryDotNetConfig(Builder builder) {
         this.apiKey = builder.apiKey;
-        this.requestTimeout = builder.requestTimeout;
+        this.connectTimeout = builder.connectTimeout;
+        this.uploadTimeout = builder.uploadTimeout;
+        this.statusTimeout = builder.statusTimeout;
+        this.publiclyVisible = builder.publiclyVisible;
         this.solveTimeout = builder.solveTimeout;
         this.pollInterval = builder.pollInterval;
         this.executorService = builder.executorService;
@@ -43,9 +49,17 @@ public class AstrometryDotNetConfig {
         return apiKey;
     }
 
-    public Duration getRequestTimeout() {
-        return requestTimeout;
-    }
+    /** Returns the connection-establishment timeout, or null for the client default. */
+    public Duration getConnectTimeout() { return connectTimeout; }
+
+    /** Returns the upload request timeout, including its response, or null for the client default. */
+    public Duration getUploadTimeout() { return uploadTimeout; }
+
+    /** Returns the login and polling request timeout, or null for the client default. */
+    public Duration getStatusTimeout() { return statusTimeout; }
+
+    /** Returns whether uploads deliberately opt into public visibility; false is the default. */
+    public boolean isPubliclyVisible() { return publiclyVisible; }
 
     public Duration getSolveTimeout() {
         return solveTimeout;
@@ -68,7 +82,10 @@ public class AstrometryDotNetConfig {
      */
     public static final class Builder {
         private String apiKey;
-        private Duration requestTimeout;
+        private Duration connectTimeout;
+        private Duration uploadTimeout;
+        private Duration statusTimeout;
+        private boolean publiclyVisible;
         private Duration solveTimeout;
         private Duration pollInterval;
         private ExecutorService executorService;
@@ -95,14 +112,27 @@ public class AstrometryDotNetConfig {
             return this;
         }
 
-        /**
-         * Sets the timeout for a single HTTP request.
-         *
-         * @param requestTimeout per-request timeout
-         * @return this builder
-         */
-        public Builder withRequestTimeout(Duration requestTimeout) {
-            this.requestTimeout = requestTimeout;
+        /** Sets the timeout for establishing a new HTTP connection; invalid durations use 10 seconds. */
+        public Builder withConnectTimeout(Duration connectTimeout) {
+            this.connectTimeout = connectTimeout;
+            return this;
+        }
+
+        /** Sets the upload request timeout, including its response; invalid durations use 10 minutes. */
+        public Builder withUploadTimeout(Duration uploadTimeout) {
+            this.uploadTimeout = uploadTimeout;
+            return this;
+        }
+
+        /** Sets the login and polling request timeout; invalid durations use 60 seconds. */
+        public Builder withStatusTimeout(Duration statusTimeout) {
+            this.statusTimeout = statusTimeout;
+            return this;
+        }
+
+        /** Deliberately opts into public uploads; omitting this setting keeps uploads private. */
+        public Builder withPubliclyVisible(boolean publiclyVisible) {
+            this.publiclyVisible = publiclyVisible;
             return this;
         }
 

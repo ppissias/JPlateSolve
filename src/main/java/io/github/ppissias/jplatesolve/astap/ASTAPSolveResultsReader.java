@@ -27,8 +27,8 @@ import java.util.logging.Logger;
  * <p>
  * The reader waits for ASTAP's generated {@code .ini} file, parses its
  * key/value pairs, and converts them into a {@link PlateSolveResult}. On a
- * successful solve the returned metadata also includes the expected annotated
- * image path and WCS file path.
+ * successful solve the returned metadata also includes the WCS file path.
+ * Blind solves do not generate or claim ownership of annotated JPEGs.
  */
 public class ASTAPSolveResultsReader {
 
@@ -130,7 +130,6 @@ public class ASTAPSolveResultsReader {
         solveResult.put("source", "astap");
         //return results
         if ("T".equals(PLTSOLVD)) {
-            solveResult.put("annotated_image_link", getExpectedAnnotatedFilename(fileBeingSolvedFullPath));
             solveResult.put("wcs_link", getExpectedWCSFilename(fileBeingSolvedFullPath));
 
             return new PlateSolveResult(true, null, WARNING, solveResult);
@@ -151,16 +150,6 @@ public class ASTAPSolveResultsReader {
     private String getExpectedIniFilename(String fitsFileName) {
         return sidecarPath(fitsFileName, ".ini").toString();
 
-    }
-
-    /**
-     * Expected .jpg file
-     *
-     * @param fitsFileName
-     * @return
-     */
-    private String getExpectedAnnotatedFilename(String fitsFileName) {
-        return sidecarPath(fitsFileName, "_annotated.jpg").toString();
     }
 
     /**

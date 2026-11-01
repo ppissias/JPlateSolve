@@ -19,8 +19,8 @@ import java.util.Map;
  * A successful result contains backend-specific metadata in
  * {@link #getSolveInformation()}. A failed result keeps the backend response, if
  * available, in the same map so callers can log or surface additional details.
- * The map always includes a {@code source} entry identifying the solver that
- * produced the result.
+ * Results produced by a backend include a {@code source} entry identifying that
+ * solver. Caller-constructed results may have empty metadata.
  */
 public class PlateSolveResult {
 
@@ -39,7 +39,8 @@ public class PlateSolveResult {
 	 * @param warning optional warning emitted by the solver, or {@code null} when
 	 *        there is none; blank text is normalized to {@code null}
 	 * @param solveInformation backend-specific metadata and output links; defensively copied
-	 *        as an unmodifiable map (a {@code null} map becomes an empty map)
+     *        as an unmodifiable map (a {@code null} map becomes an empty map);
+     *        null keys are omitted and null values are retained
 	 */
 	public PlateSolveResult(boolean success, String failureReason, String warning,
 			Map<String, String> solveInformation) {

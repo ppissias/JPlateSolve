@@ -43,6 +43,9 @@ public class AstrometryCancellationTest {
     private volatile String uploadJson;
     private volatile String loginBody;
     private volatile int httpStatusCode = 200;
+    private volatile String errorPath;
+    private volatile int uploadReadDelayMillis;
+    private final java.util.concurrent.atomic.AtomicLong uploadedBytes = new java.util.concurrent.atomic.AtomicLong();
     private volatile String uploadResponse = "{\"status\":\"success\",\"subid\":42}";
     /** Submission answers served before the job id; empty means the job id at once. */
     private final java.util.Queue<String> submissionStates = new java.util.concurrent.ConcurrentLinkedQueue<>();
@@ -72,13 +75,27 @@ public class AstrometryCancellationTest {
                 reached.countDown();
                 try { release.await(); } catch (InterruptedException stopped) { Thread.currentThread().interrupt(); return; }
             }
-            if (httpStatusCode >= 400) {
+            if (httpStatusCode >= 400 && path.equals(errorPath)) {
                 byte[] error = "Server error".getBytes(StandardCharsets.UTF_8);
                 exchange.sendResponseHeaders(httpStatusCode, error.length);
                 exchange.getResponseBody().write(error);
                 return;
             }
-            byte[] input = exchange.getRequestBody().readAllBytes();
+            ByteArrayOutputStream prefix = new ByteArrayOutputStream();
+            byte[] chunk = new byte[8192];
+            int uploadChunks = 0;
+            int count;
+            while ((count = exchange.getRequestBody().read(chunk)) != -1) {
+                prefix.write(chunk, 0, Math.min(count, Math.max(0, 2048 - prefix.size())));
+                if (path.equals("/api/upload")) {
+                    uploadedBytes.addAndGet(count);
+                    if (uploadReadDelayMillis > 0 && ++uploadChunks % 16 == 0) {
+                        try { Thread.sleep(uploadReadDelayMillis); }
+                        catch (InterruptedException stopped) { Thread.currentThread().interrupt(); return; }
+                    }
+                }
+            }
+            byte[] input = prefix.toByteArray();
             String result;
             switch (path) {
                 case "/api/login" -> {
@@ -103,11 +120,16 @@ public class AstrometryCancellationTest {
     }
 
     private AstrometryDotNet client(Duration budget, ExecutorService executor) {
-        return new AstrometryDotNet(AstrometryDotNetConfig.builder()
+        return new AstrometryDotNet(configuration(budget, executor).build());
+    }
+
+    /** Builds isolated client limits for loopback tests; callers can override a specific phase. */
+    private AstrometryDotNetConfig.Builder configuration(Duration budget, ExecutorService executor) {
+        return AstrometryDotNetConfig.builder()
                 .withApiKey("loopback-only")
                 .withServiceBaseUri(URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/"))
-                .withSolveTimeout(budget).withRequestTimeout(Duration.ofSeconds(30))
-                .withPollInterval(Duration.ofMillis(20)).withExecutorService(executor).build());
+                .withSolveTimeout(budget).withUploadTimeout(Duration.ofSeconds(30)).withStatusTimeout(Duration.ofSeconds(30))
+                .withPollInterval(Duration.ofMillis(20)).withExecutorService(executor);
     }
 
     private File image() throws Exception {
@@ -179,13 +201,11 @@ public class AstrometryCancellationTest {
     @Test
     public void successPreservesCalibrationAndPrivateUploadParameters() throws Exception {
         try (AstrometryDotNet client = client(Duration.ofSeconds(5), null)) {
-            SubmitFileRequest request = SubmitFileRequest.builder().withPublicly_visible("n").build();
-            var outcome = client.startCustomSolve(image(), request, null).completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            var outcome = client.startBlindSolve(image(), null).completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
             assertEquals(String.valueOf(outcome.cause()), PlateSolveOperation.Status.SUCCEEDED, outcome.status());
             assertEquals("12.5", outcome.result().getSolveInformation().get("ra"));
             assertEquals("-7.25", outcome.result().getSolveInformation().get("dec"));
             assertTrue(uploadJson.contains("\"publicly_visible\":\"n\""));
-            assertNull("The caller's request is not mutated", request.getSession());
             assertTrue(outcome.result().getSolveInformation().get("wcs_link").endsWith("/wcs_file/7"));
         }
     }
@@ -198,46 +218,19 @@ public class AstrometryCancellationTest {
             assertEquals(String.valueOf(outcome.cause()), PlateSolveOperation.Status.SUCCEEDED, outcome.status());
             assertTrue(uploadJson.contains("\"publicly_visible\":\"n\""));
             assertTrue(uploadJson.contains("\"session\":\"test-session\""));
+            assertBlindParameters();
         }
     }
 
-    /** Missing and blank visibility default to private only in the detached request. */
+    /** An immutable configuration can deliberately opt into public blind uploads. */
     @Test
-    public void customUploadsDefaultToPrivateWithoutMutatingTheCaller() throws Exception {
-        try (AstrometryDotNet client = client(Duration.ofSeconds(5), null)) {
-            for (String visibility : new String[]{null, "", " "}) {
-                SubmitFileRequest request = SubmitFileRequest.builder().withPublicly_visible(visibility).build();
-                var outcome = client.startCustomSolve(image(), request, null).completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
-                assertEquals(String.valueOf(outcome.cause()), PlateSolveOperation.Status.SUCCEEDED, outcome.status());
-                assertTrue(uploadJson.contains("\"publicly_visible\":\"n\""));
-                assertEquals(visibility, request.getPublicly_visible());
-                assertNull(request.getSession());
-            }
-        }
-    }
-
-    /** An explicit public upload remains available without mutating the caller's parameters. */
-    @Test
-    public void customUploadsPreserveExplicitPublicVisibility() throws Exception {
-        try (AstrometryDotNet client = client(Duration.ofSeconds(5), null)) {
-            SubmitFileRequest request = SubmitFileRequest.builder().withPublicly_visible("y").build();
-            var outcome = client.startCustomSolve(image(), request, null).completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+    public void publicBlindUploadsRequireExplicitConfiguration() throws Exception {
+        AstrometryDotNetConfig.Builder configuration = configuration(Duration.ofSeconds(5), null).withPubliclyVisible(true);
+        try (AstrometryDotNet client = new AstrometryDotNet(configuration.build())) {
+            configuration.withPubliclyVisible(false);
+            var outcome = client.startBlindSolve(image(), null).completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
             assertEquals(String.valueOf(outcome.cause()), PlateSolveOperation.Status.SUCCEEDED, outcome.status());
             assertTrue(uploadJson.contains("\"publicly_visible\":\"y\""));
-            assertEquals("y", request.getPublicly_visible());
-            assertNull(request.getSession());
-        }
-    }
-
-    /** Invalid null parameters retain their asynchronous operation failure without sending an upload. */
-    @Test
-    public void nullCustomParametersStillFailInsideTheOperation() throws Exception {
-        try (AstrometryDotNet client = client(Duration.ofSeconds(5), null)) {
-            var operation = client.startCustomSolve(image(), null, null);
-            var outcome = operation.completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
-            assertEquals(PlateSolveOperation.Status.FAILED, outcome.status());
-            assertTrue(outcome.cause() instanceof NullPointerException);
-            assertEquals(0, requests.get());
         }
     }
 
@@ -337,30 +330,43 @@ public class AstrometryCancellationTest {
         }
     }
 
-    /** OBJCTRA and OBJCTDEC of a FITS header become the search centre of a request that has none. */
+    /** Valid, partial and malformed pointing cards never become numeric upload constraints. */
     @Test
-    public void fitsObjectCoordinatesBecomeTheSearchCentre() throws Exception {
-        File image = fits("4", "OBJCTRA = '12 30 00'", "OBJCTDEC= '+41 15 00'");
-        try (AstrometryDotNet client = client(Duration.ofSeconds(5), null)) {
-            var outcome = client.startBlindSolve(image, null).completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
-            assertEquals(String.valueOf(outcome.cause()), PlateSolveOperation.Status.SUCCEEDED, outcome.status());
+    public void blindFitsUploadsIgnoreEveryPointingHint() throws Exception {
+        for (String[] cards : new String[][]{
+                {"OBJCTRA = '12 30 00'", "OBJCTDEC= '+41 15 00'"},
+                {"OBJCTRA = '12 30 00'"},
+                {"OBJCTRA = 'NaN 00 00'", "OBJCTDEC= '-00 30 00'"},
+                {"RA      =                187.5", "DEC     =                41.25", "FOCALLEN=                500.0"},
+                {}}) {
+            File image = fits("4", cards);
+            try (AstrometryDotNet client = client(Duration.ofSeconds(5), null)) {
+                var outcome = client.startBlindSolve(image, null).completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+                assertEquals(String.valueOf(outcome.cause()), PlateSolveOperation.Status.SUCCEEDED, outcome.status());
+                assertBlindParameters();
+            }
         }
-        assertTrue(uploadJson, uploadJson.contains("\"center_ra\":187.5"));
-        assertTrue(uploadJson, uploadJson.contains("\"center_dec\":41.25"));
     }
 
-    /**
-     * Header values that break the FITS number rules, or object coordinates that cannot be read, leave the request
-     * as it is and the solve goes ahead; the header is read as text, so no number is parsed there.
-     */
+    /** Structurally readable headers do not require valid numbers in unrelated cards. */
     @Test
-    public void malformedHeaderValuesLeaveTheRequestUnchanged() throws Exception {
+    public void malformedHintValuesDoNotPreventABlindSolve() throws Exception {
         File image = fits("4x", "BSCALE  =                1.0.0", "OBJCTRA = '12h30m'");
         try (AstrometryDotNet client = client(Duration.ofSeconds(5), null)) {
             var outcome = client.startBlindSolve(image, null).completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
             assertEquals(String.valueOf(outcome.cause()), PlateSolveOperation.Status.SUCCEEDED, outcome.status());
+            assertBlindParameters();
         }
-        assertTrue(uploadJson, uploadJson.contains("\"center_ra\":0.0"));
+    }
+
+    /** Checks the actual multipart JSON rather than the DTO serializer in isolation. */
+    private void assertBlindParameters() {
+        int begin = uploadJson.indexOf('{');
+        int end = uploadJson.indexOf('}', begin) + 1;
+        var parameters = com.google.gson.JsonParser.parseString(uploadJson.substring(begin, end)).getAsJsonObject();
+        assertEquals(java.util.Set.of("session", "publicly_visible"), parameters.keySet());
+        assertEquals("test-session", parameters.get("session").getAsString());
+        assertEquals("n", parameters.get("publicly_visible").getAsString());
     }
 
     /** A file named as FITS whose header cannot be read fails the solve with a cause, before anything is uploaded. */
@@ -480,26 +486,105 @@ public class AstrometryCancellationTest {
         }
     }
 
+    /** An accepted upload without an identifier is a protocol failure, and never starts polling. */
     @Test
-    public void missingSubmissionIdRejectsOperation() throws Exception {
-        uploadResponse = "{\"status\":\"success\"}";
-        try (AstrometryDotNet client = client(Duration.ofSeconds(5), null)) {
-            var outcome = client.startBlindSolve(image(), null).completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
-            assertEquals(PlateSolveOperation.Status.REJECTED, outcome.status());
-            assertNotNull(outcome.result());
-            assertFalse(outcome.result().isSuccess());
-            assertEquals("Submit request was not successful", outcome.result().getFailureReason());
+    public void absentOrBlankSubmissionIdsFailBeforePolling() throws Exception {
+        for (String response : new String[]{"{\"status\":\"success\"}",
+                "{\"status\":\"success\",\"subid\":null}",
+                "{\"status\":\"success\",\"subid\":\"\"}",
+                "{\"status\":\"success\",\"subid\":\"  \"}"}) {
+            uploadResponse = response;
+            int before = requests.get();
+            try (AstrometryDotNet client = client(Duration.ofSeconds(5), null)) {
+                var outcome = client.startBlindSolve(image(), null).completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+                assertEquals(PlateSolveOperation.Status.FAILED, outcome.status());
+                assertNull(outcome.result());
+                assertTrue(outcome.cause() instanceof IOException);
+                assertTrue(outcome.cause().getMessage().contains("without a submission identifier"));
+                assertEquals("Only login and upload are sent", 2, requests.get() - before);
+            }
         }
     }
 
     @Test
     public void http500ErrorFailsOperation() throws Exception {
         httpStatusCode = 500;
-        try (AstrometryDotNet client = client(Duration.ofSeconds(5), null)) {
-            var outcome = client.startBlindSolve(image(), null).completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
-            assertEquals(PlateSolveOperation.Status.FAILED, outcome.status());
-            assertNotNull(outcome.cause());
-            assertTrue(outcome.cause().getMessage().contains("HTTP status 500"));
+        for (String path : new String[]{"/api/login", "/api/upload", "/api/submissions/42", "/api/jobs/7/info"}) {
+            errorPath = path;
+            try (AstrometryDotNet client = client(Duration.ofSeconds(5), null)) {
+                var outcome = client.startBlindSolve(image(), null).completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+                assertEquals(path, PlateSolveOperation.Status.FAILED, outcome.status());
+                assertNotNull(outcome.cause());
+                assertTrue(outcome.cause().getMessage().contains("HTTP status 500"));
+            }
+        }
+    }
+
+    /** A throttled body larger than socket buffers can outlast polling limits within its own upload limit. */
+    @Test
+    public void slowUploadUsesItsOwnBudgetAndBoundedServerBuffers() throws Exception {
+        File file = image();
+        try (RandomAccessFile data = new RandomAccessFile(file, "rw")) { data.setLength(16L * 1024 * 1024); }
+        uploadReadDelayMillis = 10;
+        try (AstrometryDotNet client = new AstrometryDotNet(configuration(Duration.ofSeconds(15), null)
+                .withUploadTimeout(Duration.ofSeconds(10)).withStatusTimeout(Duration.ofMillis(500)).build())) {
+            long start = System.nanoTime();
+            var outcome = client.startBlindSolve(file, null).completion().toCompletableFuture().get(15, TimeUnit.SECONDS);
+            assertEquals(String.valueOf(outcome.cause()), PlateSolveOperation.Status.SUCCEEDED, outcome.status());
+            assertTrue(uploadedBytes.get() > 16L * 1024 * 1024);
+            assertTrue(System.nanoTime() - start > TimeUnit.MILLISECONDS.toNanos(500));
+            assertBlindParameters();
+        }
+    }
+
+    /** Independent phase failures return promptly instead of consuming the total solve budget. */
+    @Test
+    public void everyRouteTimeoutRemainsAnIndependentFailure() throws Exception {
+        for (String path : new String[]{"/api/login", "/api/upload", "/api/submissions/42", "/api/jobs/7/info"}) {
+            blockedPath = path;
+            try (AstrometryDotNet client = new AstrometryDotNet(configuration(Duration.ofSeconds(6), null)
+                    .withUploadTimeout(Duration.ofMillis(250)).withStatusTimeout(Duration.ofMillis(250)).build())) {
+                long start = System.nanoTime();
+                var outcome = client.startBlindSolve(image(), null).completion().toCompletableFuture().get(3, TimeUnit.SECONDS);
+                assertEquals(path, PlateSolveOperation.Status.FAILED, outcome.status());
+                assertTrue(outcome.cause() instanceof java.net.http.HttpTimeoutException);
+                assertTrue(System.nanoTime() - start < TimeUnit.SECONDS.toNanos(3));
+            }
+        }
+    }
+
+    /** The total monotonic budget still caps all phases even when their individual limits are longer. */
+    @Test
+    public void everyRouteIsCappedByTheTotalBudget() throws Exception {
+        for (String path : new String[]{"/api/login", "/api/upload", "/api/submissions/42", "/api/jobs/7/info"}) {
+            blockedPath = path;
+            try (AstrometryDotNet client = client(Duration.ofMillis(500), null)) {
+                var outcome = client.startBlindSolve(image(), null).completion().toCompletableFuture().get(3, TimeUnit.SECONDS);
+                assertEquals(path, PlateSolveOperation.Status.TIMED_OUT, outcome.status());
+            }
+        }
+    }
+
+    /** A new connection's stalled TLS handshake must not wait out the request or solve budget. */
+    @Test
+    public void connectionTimeoutRemainsIndependentEvenWhenRequestIsDeadlineLimited() throws Exception {
+        try (java.net.ServerSocket socket = new java.net.ServerSocket(0, 1, java.net.InetAddress.getLoopbackAddress())) {
+            java.util.concurrent.Future<?> peer = handlers.submit(() -> {
+                try (java.net.Socket accepted = socket.accept()) { release.await(); }
+                catch (IOException | InterruptedException ignored) { Thread.currentThread().interrupt(); }
+            });
+            try (AstrometryDotNet client = new AstrometryDotNet(configuration(Duration.ofSeconds(5), null)
+                    .withServiceBaseUri(URI.create("https://localhost:" + socket.getLocalPort() + "/"))
+                    .withConnectTimeout(Duration.ofMillis(250)).build())) {
+                long start = System.nanoTime();
+                var outcome = client.startBlindSolve(image(), null).completion().toCompletableFuture().get(3, TimeUnit.SECONDS);
+                assertEquals(PlateSolveOperation.Status.FAILED, outcome.status());
+                assertTrue(String.valueOf(outcome.cause()), outcome.cause() instanceof java.net.http.HttpConnectTimeoutException);
+                assertTrue(System.nanoTime() - start < TimeUnit.SECONDS.toNanos(3));
+            } finally {
+                release.countDown();
+                peer.get(3, TimeUnit.SECONDS);
+            }
         }
     }
 }

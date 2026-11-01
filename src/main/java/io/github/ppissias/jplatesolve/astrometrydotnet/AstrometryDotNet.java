@@ -20,9 +20,6 @@ import io.github.ppissias.jplatesolve.PlateSolveOperation.Phase;
 import io.github.ppissias.jplatesolve.astrometrydotnet.util.SubmitFileBodyPublisher;
 import nom.tam.fits.Fits;
 import nom.tam.fits.FitsException;
-import nom.tam.fits.Header;
-import nom.tam.fits.HeaderCard;
-import nom.tam.util.Cursor;
 
 import java.io.File;
 import java.io.IOException;
@@ -33,6 +30,7 @@ import java.net.http.HttpClient.Version;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.net.http.HttpResponse.BodyHandlers;
+import java.net.http.HttpConnectTimeoutException;
 import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -46,6 +44,7 @@ import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -76,7 +75,9 @@ public class AstrometryDotNet implements AutoCloseable {
      * Default guest API key used when no explicit API key is configured.
      */
     public static final String DEFAULT_API_KEY = "XXXXXXXX";
-    private static final Duration DEFAULT_REQUEST_TIMEOUT = Duration.ofSeconds(60);
+    private static final Duration DEFAULT_CONNECT_TIMEOUT = Duration.ofSeconds(10);
+    private static final Duration DEFAULT_UPLOAD_TIMEOUT = Duration.ofMinutes(10);
+    private static final Duration DEFAULT_STATUS_TIMEOUT = Duration.ofSeconds(60);
     private static final Duration DEFAULT_SOLVE_TIMEOUT = Duration.ofMinutes(15);
     private static final Duration DEFAULT_POLL_INTERVAL = Duration.ofSeconds(5);
 
@@ -96,7 +97,10 @@ public class AstrometryDotNet implements AutoCloseable {
     private final ExecutorService executor;
     private final boolean ownsExecutor;
     private final String apiKey;
-    private final Duration requestTimeout;
+    private final Duration connectTimeout;
+    private final Duration uploadTimeout;
+    private final Duration statusTimeout;
+    private final boolean publiclyVisible;
     private final Duration solveTimeout;
     private final Duration pollInterval;
     private final URI serviceBaseUri;
@@ -133,7 +137,10 @@ public class AstrometryDotNet implements AutoCloseable {
         this.gson = new Gson();
         this.logger = Logger.getLogger(AstrometryDotNet.class.getName());
         this.apiKey = sanitizeApiKey(effectiveConfig.getApiKey());
-        this.requestTimeout = sanitizeDuration(effectiveConfig.getRequestTimeout(), DEFAULT_REQUEST_TIMEOUT);
+        this.connectTimeout = sanitizeDuration(effectiveConfig.getConnectTimeout(), DEFAULT_CONNECT_TIMEOUT);
+        this.uploadTimeout = sanitizeDuration(effectiveConfig.getUploadTimeout(), DEFAULT_UPLOAD_TIMEOUT);
+        this.statusTimeout = sanitizeDuration(effectiveConfig.getStatusTimeout(), DEFAULT_STATUS_TIMEOUT);
+        this.publiclyVisible = effectiveConfig.isPubliclyVisible();
         this.solveTimeout = sanitizeDuration(effectiveConfig.getSolveTimeout(), DEFAULT_SOLVE_TIMEOUT);
         this.pollInterval = sanitizeDuration(effectiveConfig.getPollInterval(), DEFAULT_POLL_INTERVAL);
 
@@ -160,7 +167,7 @@ public class AstrometryDotNet implements AutoCloseable {
 
         this.client = HttpClient.newBuilder()
                 .version(Version.HTTP_2)
-                .connectTimeout(this.requestTimeout)
+                .connectTimeout(this.connectTimeout)
                 .build();
     }
 
@@ -182,14 +189,14 @@ public class AstrometryDotNet implements AutoCloseable {
         return apiKey;
     }
 
-    /**
-     * Returns the timeout applied to individual HTTP requests.
-     *
-     * @return per-request timeout
-     */
-    public Duration getRequestTimeout() {
-        return requestTimeout;
-    }
+    /** Returns the timeout for establishing a new connection. */
+    public Duration getConnectTimeout() { return connectTimeout; }
+
+    /** Returns the upload request timeout, including the service response. */
+    public Duration getUploadTimeout() { return uploadTimeout; }
+
+    /** Returns the login and polling request timeout. */
+    public Duration getStatusTimeout() { return statusTimeout; }
 
     /**
      * Returns the total timeout for a remote solve operation.
@@ -223,10 +230,10 @@ public class AstrometryDotNet implements AutoCloseable {
     private void login(Context context) throws IOException, InterruptedException {
         LoginRequest parameters = LoginRequest.builder().withApikey(apiKey).build();
         String body = "request-json=" + URLEncoder.encode(gson.toJson(parameters), StandardCharsets.UTF_8);
-        HttpRequest request = requestBuilder(LOGIN_URI, context)
+        HttpRequest.Builder request = HttpRequest.newBuilder(serviceBaseUri.resolve(LOGIN_URI))
                 .POST(HttpRequest.BodyPublishers.ofString(body))
-                .header("Content-Type", "application/x-www-form-urlencoded").build();
-        HttpResponse<String> response = sendRequest(request, context);
+                .header("Content-Type", "application/x-www-form-urlencoded");
+        HttpResponse<String> response = sendRequest(request, statusTimeout, context);
         LoginResponse result = gson.fromJson(response.body(), LoginResponse.class);
         if (result == null || !"success".equals(result.getStatus())
                 || result.getSession() == null || result.getSession().isBlank()) {
@@ -238,40 +245,30 @@ public class AstrometryDotNet implements AutoCloseable {
         sessionID = result.getSession();
     }
 
-    /** Starts a blind solve with a private upload; use a custom request to opt into public visibility. */
-    public PlateSolveOperation startBlindSolve(File imageFile, Consumer<PlateSolveOperation.Progress> progress) {
-        return startCustomSolve(imageFile, SubmitFileRequest.builder().withPublicly_visible("n").build(), progress);
-    }
-
     /**
-     * Starts a solve with detached parameters, defaulting absent or blank visibility to a private upload.
-     * Cancellation stops local requests and polling, not a remote job already accepted by Astrometry.net.
+     * Starts an unrestricted solve without extracting pointing or scale hints from the image.
+     * Uploads are private unless the immutable client configuration explicitly opts into public visibility.
+     * Cancellation stops local work, not a remote job already accepted by Astrometry.net.
      */
-    public PlateSolveOperation startCustomSolve(File imageFile, SubmitFileRequest parameters,
-                                                Consumer<PlateSolveOperation.Progress> progress) {
-        SubmitFileRequest snapshot = gson.fromJson(gson.toJson(parameters), SubmitFileRequest.class);
-        if (snapshot != null && (snapshot.getPublicly_visible() == null || snapshot.getPublicly_visible().isBlank())) {
-            snapshot.setPublicly_visible("n");
-        }
+    public PlateSolveOperation startBlindSolve(File imageFile, Consumer<PlateSolveOperation.Progress> progress) {
         synchronized (lifecycle) {
             if (closed) throw new IllegalStateException("Astrometry.net client is closed.");
             PlateSolveOperation operation = PlateSolveOperation.start(solveTimeout, progress, executor, context -> {
                 context.report(Phase.PREPARING, "Preparing Astrometry.net solve");
-                if (snapshot.getSession() == null || snapshot.getSession().isBlank()) {
+                if (sessionID == null || sessionID.isBlank()) {
                     context.report(Phase.LOGGING_IN, "Logging in to Astrometry.net");
                     loginLock.lockInterruptibly();
                     try {
                         context.checkCancelled();
                         if (sessionID == null || sessionID.isBlank()) login(context);
-                        snapshot.setSession(sessionID);
                     } finally {
                         loginLock.unlock();
                     }
                 }
                 context.checkCancelled();
-                if (isFitsFile(imageFile)) updateFromFitsHeader(imageFile, snapshot);
+                if (isFitsFile(imageFile)) validateFitsHeader(imageFile);
                 context.checkCancelled();
-                return performSolve(imageFile, snapshot, context);
+                return performSolve(imageFile, new SubmitFileRequest(sessionID, publiclyVisible ? "y" : "n"), context);
             });
             operations.add(operation);
             operation.completion().whenComplete((outcome, failure) -> {
@@ -336,14 +333,16 @@ public class AstrometryDotNet implements AutoCloseable {
             throws IOException, InterruptedException {
         context.report(Phase.UPLOADING, "Uploading image to Astrometry.net");
         String boundary = UUID.randomUUID().toString();
-        HttpRequest request = requestBuilder(SUBMIT_FILE_URI, context)
+        HttpRequest.Builder request = HttpRequest.newBuilder(serviceBaseUri.resolve(SUBMIT_FILE_URI))
                 .POST(SubmitFileBodyPublisher.getBodyPublisher(imageFile, gson.toJson(parameters), boundary))
-                .header("Content-Type", "multipart/form-data; boundary=" + boundary).build();
-        HttpResponse<String> response = sendRequest(request, context);
+                .header("Content-Type", "multipart/form-data; boundary=" + boundary);
+        HttpResponse<String> response = sendRequest(request, uploadTimeout, context);
         SubmitFileResponse submission = gson.fromJson(response.body(), SubmitFileResponse.class);
-        if (submission == null || !"success".equals(submission.getStatus())
-                || submission.getSubid() == null || submission.getSubid().isBlank()) {
+        if (submission == null || !"success".equals(submission.getStatus())) {
             return failureResult("Submit request was not successful", response.body());
+        }
+        if (submission.getSubid() == null || submission.getSubid().isBlank()) {
+            throw new IOException("Astrometry.net accepted the upload without a submission identifier.");
         }
         context.report(Phase.WAITING_FOR_JOB, "Waiting for Astrometry.net job");
         int jobID = waitForJobId(submission, context);
@@ -355,8 +354,8 @@ public class AstrometryDotNet implements AutoCloseable {
 
     private int waitForJobId(SubmitFileResponse submission, Context context) throws IOException, InterruptedException {
         while (true) {
-            HttpResponse<String> response = sendRequest(requestBuilder(SUBMISSION_PROGRESS_URI + submission.getSubid(), context)
-                    .GET().build(), context);
+            HttpResponse<String> response = sendRequest(HttpRequest.newBuilder(
+                    serviceBaseUri.resolve(SUBMISSION_PROGRESS_URI + submission.getSubid())).GET(), statusTimeout, context);
             Integer jobID = firstJobId(response.body());
             if (jobID != null) return jobID;
             context.pause(pollInterval);
@@ -392,8 +391,8 @@ public class AstrometryDotNet implements AutoCloseable {
 
     private JobResultResponse waitForJobResult(int jobID, Context context) throws IOException, InterruptedException {
         while (true) {
-            HttpResponse<String> response = sendRequest(requestBuilder(JOB_PROGRESS_URI + jobID + "/info", context)
-                    .GET().build(), context);
+            HttpResponse<String> response = sendRequest(HttpRequest.newBuilder(
+                    serviceBaseUri.resolve(JOB_PROGRESS_URI + jobID + "/info")).GET(), statusTimeout, context);
             JobResultResponse result = gson.fromJson(response.body(), JobResultResponse.class);
             if (result != null && ("success".equals(result.getStatus()) || "failure".equals(result.getStatus()))) return result;
             context.pause(pollInterval);
@@ -439,22 +438,31 @@ public class AstrometryDotNet implements AutoCloseable {
         return new PlateSolveResult(false, failureReason, null, solveInformation);
     }
 
-    private HttpRequest.Builder requestBuilder(String path, Context context) {
-        Duration timeout = requestTimeout;
-        if (context != null && context.remaining().compareTo(timeout) < 0) timeout = context.remaining();
-        return HttpRequest.newBuilder(serviceBaseUri.resolve(path)).timeout(timeout);
-    }
-
-    private HttpResponse<String> sendRequest(HttpRequest request, Context context) throws IOException, InterruptedException {
+    /** Applies the route limit and remaining total budget, preserving independent connection/request failures. */
+    private HttpResponse<String> sendRequest(HttpRequest.Builder builder, Duration routeTimeout, Context context)
+            throws IOException, InterruptedException {
         if (context != null) context.checkCancelled();
+        Duration timeout = routeTimeout;
+        boolean deadlineLimited = false;
+        if (context != null) {
+            Duration remaining = context.remaining();
+            if (remaining.compareTo(timeout) <= 0) {
+                timeout = remaining;
+                deadlineLimited = true;
+            }
+        }
+        HttpRequest request = builder.timeout(timeout).build();
         HttpResponse<String> response;
         try {
             response = client.send(request, BodyHandlers.ofString());
-        } catch (HttpTimeoutException timeout) {
-            if (context != null && request.timeout().orElse(requestTimeout).compareTo(requestTimeout) < 0) {
-                context.pause(context.remaining());
+        } catch (HttpTimeoutException requestTimedOut) {
+            if (context != null) {
+                if (deadlineLimited && !(requestTimedOut instanceof HttpConnectTimeoutException)) {
+                    context.pause(context.remaining());
+                }
+                context.checkCancelled();
             }
-            throw timeout;
+            throw requestTimedOut;
         }
         if (context != null) context.checkCancelled();
         if (response.statusCode() >= 400) {
@@ -465,7 +473,7 @@ public class AstrometryDotNet implements AutoCloseable {
 
     private boolean isFitsFile(File imageFile) {
         String[] acceptedFileTypes = {"fits", "fit", "fts"};
-        String lowercaseName = imageFile.getName().toLowerCase();
+        String lowercaseName = imageFile.getName().toLowerCase(Locale.ROOT);
         for (String acceptedFileEnd : acceptedFileTypes) {
             if (lowercaseName.endsWith(acceptedFileEnd)) {
                 return true;
@@ -474,16 +482,8 @@ public class AstrometryDotNet implements AutoCloseable {
         return false;
     }
 
-    /**
-     * Will update the provided SubmitFileRequest parameters with values from the FITS header
-     * It will only update the parameters if a corresponding value is not present in the SubmitFileRequest object.
-     * @param fitsFile the FITS file
-     * @param parameters the solve parameters
-     * @return an updated SubmitFileRequest object
-     * @throws FitsException if the FITS file cannot be parsed
-     * @throws IOException if the FITS file cannot be read
-     */
-    private SubmitFileRequest updateFromFitsHeader(File imageFile, SubmitFileRequest parameters) throws FitsException, IOException {
+    /** Checks that a FITS primary header can be read without interpreting its pointing or scale cards. */
+    private void validateFitsHeader(File imageFile) throws FitsException, IOException {
         try (Fits fitsImageFile = new Fits(imageFile)) {
             nom.tam.fits.BasicHDU<?> hdu;
             try {
@@ -494,101 +494,7 @@ public class AstrometryDotNet implements AutoCloseable {
             if (hdu == null || hdu.getHeader() == null) {
                 throw new FitsException("The file " + imageFile.getName() + " is not a readable FITS image.");
             }
-            Header fitsHeader = hdu.getHeader();
-            Cursor<String, HeaderCard> iter = fitsHeader.iterator();
-            while (iter.hasNext()) {
-                HeaderCard fitsHeaderCard = iter.next();
-                String headerKeyword = fitsHeaderCard.getKey();
-                String headerKeywordValue = fitsHeaderCard.getValue();
-
-                logger.fine("Processing fits header keyword:" + headerKeyword + " which has value:" + headerKeywordValue);
-                switch (headerKeyword) {
-                    case "OBJCTRA": {
-                        logger.fine("found keyword OBJCTRA");
-                        if (parameters.getCenter_ra() == 0.0f) {
-                            try {
-                                parameters.setCenter_ra(getRA(headerKeywordValue));
-                                logger.fine("updated with value:" + parameters.getCenter_ra());
-                            } catch (IllegalArgumentException ex) {
-                                logger.warning(ex.getMessage() + " will not update RA value");
-                            }
-                        } else {
-                            logger.fine("will not update since the provided object has value :" + parameters.getCenter_ra());
-                        }
-                        break;
-                    }
-                    case "OBJCTDEC": {
-                        logger.fine("found keyword OBJCTDEC");
-                        if (parameters.getCenter_dec() == 0.0f) {
-                            try {
-                                parameters.setCenter_dec(getDEC(headerKeywordValue));
-                                logger.fine("updated with value:" + parameters.getCenter_dec());
-                            } catch (IllegalArgumentException ex) {
-                                logger.warning(ex.getMessage() + " will not update DEC value");
-                            }
-                        } else {
-                            logger.fine("will not update since the provided object has value :" + parameters.getCenter_dec());
-                        }
-                        break;
-                    }
-                    default: {
-                    }
-                }
-            }
         }
-
-        return parameters;
-    }
-
-
-    /**
-     * Will return the RA in float format from a String representation
-     * @param RAString right ascension expressed as hour minute second components
-     * @return right ascension in degrees
-     */
-    private float getRA(String RAString) {
-        String RAStringProc = RAString.replaceAll("'", "");
-        RAStringProc = RAStringProc.replaceAll("\"", "");
-
-        String[] coordinates = RAStringProc.split(" ");
-        if (coordinates.length != 3) {
-            throw new IllegalArgumentException("Cannot decode " + RAString + " as RA");
-        }
-
-        float result = Float.parseFloat(coordinates[0]) * 15;
-        result += (Float.parseFloat(coordinates[1]) * 0.25f);
-        result += (Float.parseFloat(coordinates[2]) * 0.00417f);
-
-        return result;
-    }
-
-    /**
-     * Will return the DEC in float format from a String representation
-     * @param DECString declination expressed as degree minute second components
-     * @return declination in degrees
-     */
-    private float getDEC(String DECString) {
-        String DECStringProc = DECString.replaceAll("'", "");
-        DECStringProc = DECStringProc.replaceAll("\"", "");
-
-        String[] coordinates = DECStringProc.split(" ");
-        if (coordinates.length != 3) {
-            throw new IllegalArgumentException("Cannot decode " + DECString + "as DEC");
-        }
-
-        float result = Float.parseFloat(coordinates[0]);
-        if (result < 0) {
-            result -= Float.parseFloat(coordinates[1]) / 60;
-        } else {
-            result += Float.parseFloat(coordinates[1]) / 60;
-        }
-        if (result < 0) {
-            result -= Float.parseFloat(coordinates[2]) / 3600;
-        } else {
-            result += Float.parseFloat(coordinates[2]) / 3600;
-        }
-
-        return result;
     }
 
     private static String sanitizeApiKey(String configuredApiKey) {

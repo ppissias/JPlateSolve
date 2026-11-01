@@ -25,7 +25,7 @@ def hasLegacySigning = findProperty('signing.keyId') != null &&
 def signingConfigured = hasInMemorySigning || hasLegacySigning
 
 group = 'io.github.ppissias.jplatesolve'
-version = '1.0.1'
+version = '1.0.2'
 description = 'Pure Java library for automated astrometric plate solving via ASTAP and Astrometry.net.'
 
 base {
@@ -75,7 +75,7 @@ test {
 }
 
 tasks.register('integrationTest', Test) {
-    description = 'Runs live Astrometry.net integration tests.'
+    description = 'Runs opt-in live Astrometry.net and configured ASTAP integration tests.'
     group = 'verification'
     useJUnit()
     testClassesDirs = sourceSets.integrationTest.output.classesDirs

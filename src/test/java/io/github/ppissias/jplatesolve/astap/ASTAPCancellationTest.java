@@ -20,7 +20,8 @@ public class ASTAPCancellationTest {
 
     private PlateSolveOperation start(Path image, String mode, Duration budget, boolean ignoreGracefulStop) throws Exception {
         String classes = Path.of(AstapProcessFixture.class.getProtectionDomain().getCodeSource().getLocation().toURI()).toString();
-        return ASTAPInterface.startSolve(new File("unused"), image.toString(), budget, null, (executable, source) -> {
+        return ASTAPInterface.startSolve(new File("unused"), image.toString(), budget, null, builder -> {
+            String source = builder.command().get(builder.command().indexOf("-f") + 1);
             String java = Path.of(System.getProperty("java.home"), "bin", "java").toString();
             Process process = new ProcessBuilder(java, "-cp", classes, AstapProcessFixture.class.getName(), source, mode)
                     .redirectErrorStream(true).start();
@@ -144,7 +145,7 @@ public class ASTAPCancellationTest {
         Path ini = folder.getRoot().toPath().resolve("launch.ini");
         Files.writeString(ini, "old-ini");
         var operation = ASTAPInterface.startSolve(new File("missing"), image.toString(), Duration.ofSeconds(5), null,
-                (executable, source) -> { throw new java.io.IOException("Cannot launch"); });
+                builder -> { throw new java.io.IOException("Cannot launch"); });
         assertEquals(PlateSolveOperation.Status.FAILED, operation.completion().toCompletableFuture().get(5, TimeUnit.SECONDS).status());
         assertEquals("old-ini", Files.readString(ini));
     }
@@ -165,5 +166,49 @@ public class ASTAPCancellationTest {
         assertTrue(operation.cancel());
         assertEquals(PlateSolveOperation.Status.CANCELLED, operation.completion().toCompletableFuture().get(5, TimeUnit.SECONDS).status());
         assertFalse(ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false));
+    }
+
+    /** The actual process command requests a full sky and automatic scale independently of source headers. */
+    @Test
+    public void productionCommandUsesFixedBlindSettingsAndNeverRequestsAnnotation() throws Exception {
+        Path image = image("image with spaces.fits");
+        var outcome = ASTAPInterface.startSolve(new File("solver with spaces"), image.toString(),
+                Duration.ofSeconds(5), null, builder -> {
+                    java.util.List<String> command = builder.command();
+                    assertEquals(image.toAbsolutePath().toString(), command.get(command.indexOf("-f") + 1));
+                    assertEquals("0", command.get(command.indexOf("-ra") + 1));
+                    assertEquals("90", command.get(command.indexOf("-spd") + 1));
+                    assertEquals("180", command.get(command.indexOf("-r") + 1));
+                    assertEquals("0", command.get(command.indexOf("-fov") + 1));
+                    assertEquals("0", command.get(command.indexOf("-z") + 1));
+                    assertTrue(command.contains("-wcs"));
+                    assertFalse(command.contains("-annotate"));
+                    assertFalse(command.contains("-update"));
+                    assertTrue(builder.redirectErrorStream());
+                    throw new java.io.IOException("Command captured");
+                }).completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        assertEquals(PlateSolveOperation.Status.FAILED, outcome.status());
+        assertEquals("Command captured", outcome.cause().getMessage());
+    }
+
+    /** A blind solve never owns, removes, replaces or advertises an older annotated JPEG. */
+    @Test
+    public void annotatedJpegIsPreservedAcrossSuccessRejectionCancellationAndLaunchFailure() throws Exception {
+        for (String mode : new String[]{"success", "reject", "hang", "launch"}) {
+            Path image = image("annotation-" + mode + ".fits");
+            Path jpeg = ASTAPSolveResultsReader.sidecarPath(image.toString(), "_annotated.jpg");
+            Files.writeString(jpeg, "user-jpeg");
+            PlateSolveOperation operation;
+            if (mode.equals("launch")) {
+                operation = ASTAPInterface.startSolve(new File("missing"), image.toString(), Duration.ofSeconds(5),
+                        null, builder -> { throw new java.io.IOException("Cannot launch"); });
+            } else {
+                operation = start(image, mode, Duration.ofSeconds(5));
+                if (mode.equals("hang")) { awaitPid(image); operation.cancel(); }
+            }
+            var outcome = operation.completion().toCompletableFuture().get(8, TimeUnit.SECONDS);
+            assertEquals(mode, "user-jpeg", Files.readString(jpeg));
+            if (outcome.result() != null) assertFalse(outcome.result().getSolveInformation().containsKey("annotated_image_link"));
+        }
     }
 }

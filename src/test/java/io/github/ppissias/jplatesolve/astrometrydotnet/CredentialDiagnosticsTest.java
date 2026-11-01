@@ -24,12 +24,11 @@ public class CredentialDiagnosticsTest {
     /** Upload diagnostics hide the token while authenticated requests still serialize it. */
     @Test
     public void uploadRequestRedactsItsSessionOnlyInDiagnostics() {
-        SubmitFileRequest request = SubmitFileRequest.builder()
-                .withSession("synthetic-upload-token").withPublicly_visible("n").build();
-        assertFalse(request.toString().contains(request.getSession()));
+        SubmitFileRequest request = new SubmitFileRequest("synthetic-upload-token", "n");
+        assertFalse(request.toString().contains(request.session()));
         assertTrue(request.toString().contains("session=<redacted>"));
         assertTrue(request.toString().contains("publicly_visible=n"));
-        assertEquals(request.getSession(), JsonParser.parseString(new Gson().toJson(request))
+        assertEquals(request.session(), JsonParser.parseString(new Gson().toJson(request))
                 .getAsJsonObject().get("session").getAsString());
     }
 }
