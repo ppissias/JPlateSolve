@@ -22,23 +22,7 @@ A fresh review of the library (about 2,300 lines of main code and 700 of tests),
 
 | ID | Change | Priority | Size |
 |---|---|---|---|
-| [JP-07](#jp-07-a-consistent-result-contract) | A consistent result contract | Medium | Small |
 | [JP-08](#jp-08-offline-contract-tests-and-javadoc-checks) | Offline contract tests and Javadoc checks | Low | Small |
-
-### JP-07. A consistent result contract
-
-The earlier review narrowed this to three things that are still open:
-
-- **`PlateSolveResult`** is documented as immutable, but returns the caller's mutable `HashMap`. Copy the map in the constructor and return an unmodifiable view.
-- **On success,** ASTAP sets the failure reason to null and Astrometry.net sets it to an empty string. Use null for "absent" on both, and keep a real warning.
-- **Protocol fixtures** for multiple jobs, malformed JSON, a missing submission ID and an HTTP error status. Fixtures for nova's empty and `[null]` job states already exist.
-
-Add a failure-category enum only when a caller needs to act on it, for example to retry after a network failure. SpacePixels words failures from exception types and has no retry.
-
-**Issue review (2026-10-24; evaluate before implementation).**
-- Copy the supplied map before wrapping it; an unmodifiable view over the caller's map is still mutable through the caller. Test both mutation of the original map after construction and attempted mutation through the accessor.
-- Decide the null contract explicitly. Existing construction paths can supply a null map (including the legacy adapter), and an unconditional `Map.copyOf` would reject it and null entries. Align those paths with JP-10 and document whether absent metadata becomes an empty map or is rejected. Clarify when the documented `source` entry is guaranteed.
-- Normalize absent failure/warning text without discarding a real warning. Keep `REJECTED`, `FAILED`, `TIMED_OUT` and `CANCELLED` outcomes distinct. Multiple-job fixtures should document the current first-non-null job selection; choosing a different successful job would be a protocol policy change, not just a fixture.
 
 ### JP-08. Offline contract tests and Javadoc checks
 

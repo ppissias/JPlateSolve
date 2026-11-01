@@ -11,7 +11,7 @@ JPlateSolve supports two completely different backend engines, allowing you to c
 1. **Local Plate Solving (ASTAP):** Interfaces directly with a local installation of the blazing-fast [ASTAP (Astrometric STAcking Program)](https://www.hnsky.org/astap.htm) executable. Perfect for rapid, offline solving.
 2. **Cloud Plate Solving (Astrometry.net):** A fully featured Java wrapper for the [nova.astrometry.net](https://nova.astrometry.net/api_help) REST API. Supports both blind solving and custom solving with parameters.
 3. **Smart FITS Parsing:** Automatically reads `nom.tam.fits` headers (like `OBJCTRA` and `OBJCTDEC`) to extract coordinate hints, dramatically speeding up the solving process.
-4. **Asynchronous and Cancellable:** New solve operations expose phase progress and a completion stage that resolves after local cleanup. Legacy `Future<PlateSolveResult>` methods remain available.
+4. **Asynchronous and Cancellable:** Solve operations expose phase progress and a completion stage that resolves after local cleanup.
 
 ## ⚠️ Prerequisites
 
@@ -21,7 +21,7 @@ JPlateSolve supports two completely different backend engines, allowing you to c
 
 ### Upload privacy
 
-Blind solves upload privately (`publicly_visible=n`). Custom solves also default to private when visibility is absent or blank, including through the legacy `Future` methods. To publish an upload deliberately, pass `SubmitFileRequest.builder().withPublicly_visible("y").build()` to a custom solve. A public upload shares the image and its FITS metadata on Astrometry.net.
+Blind solves upload privately (`publicly_visible=n`). Custom solves also default to private when visibility is absent or blank. To publish an upload deliberately, pass `SubmitFileRequest.builder().withPublicly_visible("y").build()` to a custom solve. A public upload shares the image and its FITS metadata on Astrometry.net.
 
 Private visibility does not remove metadata from the file. The anonymous login uses a shared account whose other users can see its jobs. Remove observing-site and observer information from a temporary copy before uploading sensitive FITS images, as SpacePixels does. JPlateSolve uploads the file supplied by its caller; it does not sanitize or modify that original. Diagnostic `toString()` values redact session tokens while authentication payloads retain them.
 

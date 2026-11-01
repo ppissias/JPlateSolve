@@ -9,6 +9,8 @@
  */
 package io.github.ppissias.jplatesolve;
 
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -33,18 +35,29 @@ public class PlateSolveResult {
 	 *
 	 * @param success whether the solve operation completed successfully
 	 * @param failureReason human-readable failure description, or {@code null} when
-	 *        the solve succeeded
+	 *        the solve succeeded; blank text is normalized to {@code null}
 	 * @param warning optional warning emitted by the solver, or {@code null} when
-	 *        there is none
-	 * @param solveInformation backend-specific metadata and output links
+	 *        there is none; blank text is normalized to {@code null}
+	 * @param solveInformation backend-specific metadata and output links; defensively copied
+	 *        as an unmodifiable map (a {@code null} map becomes an empty map)
 	 */
 	public PlateSolveResult(boolean success, String failureReason, String warning,
 			Map<String, String> solveInformation) {
 		super();
 		this.success = success;
-		this.failureReason = failureReason;
-		this.warning = warning;
-		this.solveInformation = solveInformation;
+		this.failureReason = (failureReason == null || failureReason.isBlank()) ? null : failureReason;
+		this.warning = (warning == null || warning.isBlank()) ? null : warning;
+		if (solveInformation == null || solveInformation.isEmpty()) {
+			this.solveInformation = Collections.emptyMap();
+		} else {
+			Map<String, String> copy = new LinkedHashMap<>();
+			for (Map.Entry<String, String> entry : solveInformation.entrySet()) {
+				if (entry.getKey() != null) {
+					copy.put(entry.getKey(), entry.getValue());
+				}
+			}
+			this.solveInformation = Collections.unmodifiableMap(copy);
+		}
 	}
 
 	/**

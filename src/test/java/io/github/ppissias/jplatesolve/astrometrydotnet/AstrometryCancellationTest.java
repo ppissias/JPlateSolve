@@ -42,6 +42,8 @@ public class AstrometryCancellationTest {
     private volatile String loginAnswer = "{\"status\":\"success\",\"session\":\"test-session\"}";
     private volatile String uploadJson;
     private volatile String loginBody;
+    private volatile int httpStatusCode = 200;
+    private volatile String uploadResponse = "{\"status\":\"success\",\"subid\":42}";
     /** Submission answers served before the job id; empty means the job id at once. */
     private final java.util.Queue<String> submissionStates = new java.util.concurrent.ConcurrentLinkedQueue<>();
 
@@ -70,6 +72,12 @@ public class AstrometryCancellationTest {
                 reached.countDown();
                 try { release.await(); } catch (InterruptedException stopped) { Thread.currentThread().interrupt(); return; }
             }
+            if (httpStatusCode >= 400) {
+                byte[] error = "Server error".getBytes(StandardCharsets.UTF_8);
+                exchange.sendResponseHeaders(httpStatusCode, error.length);
+                exchange.getResponseBody().write(error);
+                return;
+            }
             byte[] input = exchange.getRequestBody().readAllBytes();
             String result;
             switch (path) {
@@ -79,7 +87,7 @@ public class AstrometryCancellationTest {
                 }
                 case "/api/upload" -> {
                     uploadJson = new String(input, StandardCharsets.UTF_8);
-                    result = "{\"status\":\"success\",\"subid\":42}";
+                    result = uploadResponse;
                 }
                 case "/api/submissions/42" -> {
                     String state = submissionStates.poll();
@@ -364,6 +372,9 @@ public class AstrometryCancellationTest {
             var outcome = client.startBlindSolve(image, null).completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
             assertEquals(PlateSolveOperation.Status.FAILED, outcome.status());
             assertNotNull(outcome.cause());
+            assertTrue("cause is FitsException", outcome.cause() instanceof nom.tam.fits.FitsException);
+            assertTrue("cause names file: " + outcome.cause().getMessage(), outcome.cause().getMessage().contains(image.getName()));
+            assertTrue("cause explains unreadable: " + outcome.cause().getMessage(), outcome.cause().getMessage().contains("not a readable FITS image"));
         }
         assertNull("nothing is uploaded", uploadJson);
     }
@@ -439,6 +450,56 @@ public class AstrometryCancellationTest {
             client.close();
             assertTrue(operation.isDone());
             assertEquals(PlateSolveOperation.Status.CANCELLED, operation.completion().toCompletableFuture().get().status());
+        }
+    }
+
+    @Test
+    public void multipleJobsSelectsFirstNonNullJob() throws Exception {
+        submissionStates.add("{\"jobs\":[null, 7, 8]}");
+        try (AstrometryDotNet client = client(Duration.ofSeconds(5), null)) {
+            var outcome = client.startBlindSolve(image(), null).completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertEquals(PlateSolveOperation.Status.SUCCEEDED, outcome.status());
+            assertNotNull(outcome.result());
+            assertTrue(outcome.result().isSuccess());
+            assertNull(outcome.result().getFailureReason());
+            assertNull(outcome.result().getWarning());
+            assertEquals("12.5", outcome.result().getSolveInformation().get("ra"));
+            assertEquals("-7.25", outcome.result().getSolveInformation().get("dec"));
+        }
+    }
+
+    @Test
+    public void malformedJsonInSubmissionFailsOperation() throws Exception {
+        submissionStates.add("{not-valid-json");
+        try (AstrometryDotNet client = client(Duration.ofSeconds(5), null)) {
+            var outcome = client.startBlindSolve(image(), null).completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertEquals(PlateSolveOperation.Status.FAILED, outcome.status());
+            assertNotNull(outcome.cause());
+            assertTrue(outcome.cause() instanceof IOException);
+            assertTrue(outcome.cause().getMessage().contains("unreadable submission status"));
+        }
+    }
+
+    @Test
+    public void missingSubmissionIdRejectsOperation() throws Exception {
+        uploadResponse = "{\"status\":\"success\"}";
+        try (AstrometryDotNet client = client(Duration.ofSeconds(5), null)) {
+            var outcome = client.startBlindSolve(image(), null).completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertEquals(PlateSolveOperation.Status.REJECTED, outcome.status());
+            assertNotNull(outcome.result());
+            assertFalse(outcome.result().isSuccess());
+            assertEquals("Submit request was not successful", outcome.result().getFailureReason());
+        }
+    }
+
+    @Test
+    public void http500ErrorFailsOperation() throws Exception {
+        httpStatusCode = 500;
+        try (AstrometryDotNet client = client(Duration.ofSeconds(5), null)) {
+            var outcome = client.startBlindSolve(image(), null).completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertEquals(PlateSolveOperation.Status.FAILED, outcome.status());
+            assertNotNull(outcome.cause());
+            assertTrue(outcome.cause().getMessage().contains("HTTP status 500"));
         }
     }
 }

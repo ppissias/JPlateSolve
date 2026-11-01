@@ -22,8 +22,6 @@ For this library:
 - **Privacy.** Blind solves and custom requests with absent or blank visibility upload privately; an explicit `publicly_visible=y` remains available. This default is applied to the operation's detached request, leaving the caller's object unchanged. Anonymous Astrometry.net logins share one account, whose job list other users can see. SpacePixels therefore uploads a copy with the site and observer cards blanked, and sends `publicly_visible=n`. Never log an API key or a session token; login-response and upload-request diagnostics redact the session field without changing authentication serialization.
 - **One coordinated source set with SpacePixels and JTransient.** Change the API and its SpacePixels callers together. Document intentional public API breaks and update README examples and consumer checks; the same cleanup and failure guarantees apply to future embedding callers.
 
-**Current exceptions.** `PlateSolveResult` is documented as immutable but currently retains and exposes its input metadata map (JP-07). These are current gaps, not contracts to copy. The principles guide changes; pending proposals do not describe completed work.
-
 ## Working rules
 
 The shared working rules are in SpacePixels' [DEVELOPER.md](../SpacePixels/DEVELOPER.md#working-rules) and apply here too: discuss a fix first, remove the observing site from anything published, use descriptive code commits and generic documentation commits, don't rewrite history, refer to people as they/them. The two test frames in this repository may keep their `SITELAT`/`SITELONG` cards, but blank them in any copy uploaded to an external service.

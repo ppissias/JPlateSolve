@@ -341,7 +341,8 @@ public class AstrometryDotNet implements AutoCloseable {
                 .header("Content-Type", "multipart/form-data; boundary=" + boundary).build();
         HttpResponse<String> response = sendRequest(request, context);
         SubmitFileResponse submission = gson.fromJson(response.body(), SubmitFileResponse.class);
-        if (submission == null || !"success".equals(submission.getStatus())) {
+        if (submission == null || !"success".equals(submission.getStatus())
+                || submission.getSubid() == null || submission.getSubid().isBlank()) {
             return failureResult("Submit request was not successful", response.body());
         }
         context.report(Phase.WAITING_FOR_JOB, "Waiting for Astrometry.net job");
@@ -419,7 +420,7 @@ public class AstrometryDotNet implements AutoCloseable {
                 solveInformation.put("parity", "" + jobResResponse.getCalibration().getParity());
             }
 
-            PlateSolveResult ret = new PlateSolveResult(true, "", "", solveInformation);
+            PlateSolveResult ret = new PlateSolveResult(true, null, null, solveInformation);
             logger.fine("Will return to the user:" + ret);
             return ret;
         }
@@ -435,7 +436,7 @@ public class AstrometryDotNet implements AutoCloseable {
         if (originalResponse != null) {
             solveInformation.put("original_response", originalResponse);
         }
-        return new PlateSolveResult(false, failureReason, "", solveInformation);
+        return new PlateSolveResult(false, failureReason, null, solveInformation);
     }
 
     private HttpRequest.Builder requestBuilder(String path, Context context) {
@@ -484,7 +485,16 @@ public class AstrometryDotNet implements AutoCloseable {
      */
     private SubmitFileRequest updateFromFitsHeader(File imageFile, SubmitFileRequest parameters) throws FitsException, IOException {
         try (Fits fitsImageFile = new Fits(imageFile)) {
-            Header fitsHeader = fitsImageFile.getHDU(0).getHeader();
+            nom.tam.fits.BasicHDU<?> hdu;
+            try {
+                hdu = fitsImageFile.getHDU(0);
+            } catch (FitsException | IOException ex) {
+                throw new FitsException("The file " + imageFile.getName() + " is not a readable FITS image: " + ex.getMessage(), ex);
+            }
+            if (hdu == null || hdu.getHeader() == null) {
+                throw new FitsException("The file " + imageFile.getName() + " is not a readable FITS image.");
+            }
+            Header fitsHeader = hdu.getHeader();
             Cursor<String, HeaderCard> iter = fitsHeader.iterator();
             while (iter.hasNext()) {
                 HeaderCard fitsHeaderCard = iter.next();
