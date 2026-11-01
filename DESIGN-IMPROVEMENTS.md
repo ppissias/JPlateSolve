@@ -27,7 +27,6 @@ A fresh review of the library (about 2,300 lines of main code and 700 of tests),
 ### JP-08. Offline contract tests and Javadoc checks
 
 The Java target (21), the offline tests of both backends and the configurable service root are done. Still to do:
-- add the protocol fixtures of JP-03 (in FEATURE-REQUESTS.md) and JP-07 as those changes land;
 - re-enable doclint for public types (`build.gradle` sets `Xdoclint:none`), fixing the remaining tags instead of suppressing the check.
 
 **Issue review (2026-10-24; evaluate before implementation).**
@@ -38,4 +37,3 @@ The Java target (21), the offline tests of both backends and the configurable se
 ## Removed from the previous plan (2026-10-23)
 
 - **The completed records in `docs/archive`.** Removed; git history keeps them.
-- **JP-03 and JP-06.** Moved to [FEATURE-REQUESTS.md](FEATURE-REQUESTS.md): they change what is sent to the solvers.

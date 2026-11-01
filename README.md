@@ -9,19 +9,19 @@ It serves as the plate-solving engine behind [SpacePixels](https://github.com/pp
 JPlateSolve supports two completely different backend engines, allowing you to choose between offline speed and online convenience:
 
 1. **Local Plate Solving (ASTAP):** Interfaces directly with a local installation of the blazing-fast [ASTAP (Astrometric STAcking Program)](https://www.hnsky.org/astap.htm) executable. Perfect for rapid, offline solving.
-2. **Cloud Plate Solving (Astrometry.net):** A fully featured Java wrapper for the [nova.astrometry.net](https://nova.astrometry.net/api_help) REST API. Supports both blind solving and custom solving with parameters.
-3. **Smart FITS Parsing:** Automatically reads `nom.tam.fits` headers (like `OBJCTRA` and `OBJCTDEC`) to extract coordinate hints, dramatically speeding up the solving process.
+2. **Cloud Plate Solving (Astrometry.net):** Blind solving through the [Astrometry.net API](https://astrometry.net/doc/net/api.html), with anonymous or personal-account authentication.
+3. **Blind solving only:** No caller-supplied pointing, search-radius or optical-scale constraints. FITS headers are checked for readability without interpreting their coordinate hints. Custom solving is a [deferred feature](FEATURE-REQUESTS.md).
 4. **Asynchronous and Cancellable:** Solve operations expose phase progress and a completion stage that resolves after local cleanup.
 
 ## ⚠️ Prerequisites
 
 * **Java 21 or higher:** 
-* **For Local Solving:** You must have [ASTAP](https://www.hnsky.org/astap.htm) and its star databases (e.g., H18 or V17) installed on the host machine.
+* **For Local Solving:** You must have [ASTAP](https://www.hnsky.org/astap.htm) and a suitable star database installed on the host machine.
 * **For Cloud Solving:** nothing to install. The no-argument client logs in anonymously with the built-in guest key (`XXXXXXXX`), which nova.astrometry.net accepts; that depends on the service continuing to accept it. To solve under your own account, pass your [Astrometry.net API key](https://nova.astrometry.net/api_help) with `new AstrometryDotNet(key)` or `AstrometryDotNetConfig.Builder.withApiKey`. Uploads made with your key show up on your Astrometry.net profile. A blank key falls back to the guest key.
 
 ### Upload privacy
 
-Blind solves upload privately (`publicly_visible=n`). Custom solves also default to private when visibility is absent or blank. To publish an upload deliberately, pass `SubmitFileRequest.builder().withPublicly_visible("y").build()` to a custom solve. A public upload shares the image and its FITS metadata on Astrometry.net.
+Blind solves upload privately (`publicly_visible=n`). A library caller can deliberately opt into public uploads with `AstrometryDotNetConfig.builder().withPubliclyVisible(true)`. SpacePixels always uses private uploads. A public upload shares the image and its FITS metadata on Astrometry.net.
 
 Private visibility does not remove metadata from the file. The anonymous login uses a shared account whose other users can see its jobs. Remove observing-site and observer information from a temporary copy before uploading sensitive FITS images, as SpacePixels does. JPlateSolve uploads the file supplied by its caller; it does not sanitize or modify that original. Diagnostic `toString()` values redact session tokens while authentication payloads retain them.
 
@@ -31,7 +31,7 @@ Private visibility does not remove metadata from the file. The anonymous login u
 If you are using Gradle, include JPlateSolve in your dependencies:
 ```groovy
 dependencies {
-   implementation 'io.github.ppissias.jplatesolve:jplatesolve:1.0.1'
+   implementation 'io.github.ppissias.jplatesolve:jplatesolve:1.0.2'
 }
 ```
 
@@ -64,8 +64,8 @@ public class PlateSolverApp {
       if (outcome.status() == PlateSolveOperation.Status.SUCCEEDED) {
          PlateSolveResult result = outcome.result();
          System.out.println("Solve Successful!");
-         System.out.println("RA: " + result.getSolveInformation().get("ra"));
-         System.out.println("DEC: " + result.getSolveInformation().get("dec"));
+         System.out.println("RA: " + result.getSolveInformation().get("CRVAL1"));
+         System.out.println("DEC: " + result.getSolveInformation().get("CRVAL2"));
       } else if (outcome.status() == PlateSolveOperation.Status.REJECTED) {
          System.out.println("Solve rejected: " + outcome.result().getFailureReason());
       } else {
@@ -120,9 +120,8 @@ public class CloudSolverApp {
 ## Operation API and cancellation
 
 All solves run through the `PlateSolveOperation` API:
-`ASTAPInterface.startSolve(executable, imagePath, budget, listener)`,
-`AstrometryDotNet.startBlindSolve(image, listener)`, or
-`AstrometryDotNet.startCustomSolve(image, parameters, listener)`.
+`ASTAPInterface.startSolve(executable, imagePath, budget, listener)` or
+`AstrometryDotNet.startBlindSolve(image, listener)`.
 
 ```java
 PlateSolveOperation operation = ASTAPInterface.startSolve(
@@ -136,18 +135,44 @@ PlateSolveOperation.Outcome outcome = operation.completion().toCompletableFuture
 - Outcomes distinguish `SUCCEEDED`, solver `REJECTED`, `FAILED`, `TIMED_OUT`, and `CANCELLED`. A first accepted cancellation or timeout wins over a later solver answer. A committed answer wins a later cancellation. Cleanup failures are reported as `FAILED`, never as a clean cancellation.
 - The monotonic total budget starts before queueing and includes login, FITS preparation, process launch, upload and polling. Defaults remain **2 minutes for ASTAP** and **15 minutes for Astrometry.net**. Configure cloud budgets using `AstrometryDotNetConfig`; request timeouts are capped by the remaining solve budget. Cleanup is additional: ASTAP gets a 250 ms graceful-stop interval, then forced termination and a bounded confirmation wait.
 - Progress reports real phases and elapsed time, not invented frame counts or completion percentages. Listeners run on the solve worker, must return promptly, and must not call the owning client's `close()`. Listener exceptions stop the solve and still run cleanup.
-- ASTAP completion follows confirmed process exit and output-reader shutdown. Both output streams are merged and drained with bounded retained diagnostics. Existing `.ini`, `.wcs` and annotated JPEG sidecars are backed up before launch; unsuccessful runs remove only their generated outputs and restore those backups. Successful runs replace the old sidecars. Same-stem concurrent solves in this JVM are rejected, including `frame.fit` versus `frame.fits`. Do not run another application against the same output stem concurrently.
+- ASTAP completion follows confirmed process exit and output-reader shutdown. Both output streams are merged and drained with bounded retained diagnostics. Existing `.ini` and `.wcs` sidecars are backed up before launch; unsuccessful runs remove their generated outputs and restore those backups. Successful runs replace those sidecars. Annotated JPEGs are neither generated nor owned, deleted or advertised by the solve. Same-stem concurrent solves in this JVM are rejected, including `frame.fit` versus `frame.fits`. Do not run another application against the same output stem concurrently.
 - Cloud cancellation interrupts local HTTP work and stops polling. **It does not cancel a remote job already accepted by Astrometry.net.** No remote cancellation guarantee is made.
-- The custom request is snapshotted, so login, FITS preparation and the default private visibility do not mutate the caller's object. Existing numeric-hint defaults are unchanged.
+- Client options are immutable snapshots. A blind upload contains only its authenticated session and visibility; unspecified numeric fields are absent instead of serialized as zeros.
 - Close each cloud client when its session ends. close() cancels and joins its operations, shuts down HTTP resources, and joins an owned executor (shared 10-second limit, explicit failure if shutdown cannot be confirmed). Borrowed executors are never shut down; this client's queued operations are still cancelled. Starts after close are rejected.
+
+### JP-03. Make online blind-solve requests unambiguous
+
+Both JPlateSolve and SpacePixels use blind solving. The HTTP request sends no `center_ra`, `center_dec`, `radius`, scale bounds, downsample override or `positional_error`. The service chooses its own defaults for omitted fields. JPlateSolve never parses sexagesimal pointing or derives an optical scale; changing or corrupting those header hints cannot change its API constraints. A FITS primary header that cannot be read still fails locally before upload with a descriptive `FitsException`. The caller retains ownership of the original image and its metadata; remove sensitive metadata from a copy before uploading it.
+
+### JP-06. Improve blind-solve reliability and remove unused annotations
+
+ASTAP is invoked with `-ra 0 -spd 90 -r 180 -z 0 -fov 0 -wcs`: a fixed starting position, whole-sky search, automatic downsampling and automatic scale search. These explicit parameters prevent a header position or saved position/FOV from supplying a restricted search. The [ASTAP manual](https://www.hnsky.org/astap.htm#command_line) describes automatic FOV search over its supported range; blind solving is not a promise to solve every image scale. No `-annotate` or `-update` is requested. Results supply `wcs_link`, with local solved coordinates under `CRVAL1`/`CRVAL2`.
+
+`AstrometryDotNetConfig` separates the connection timeout (default 10 seconds), upload request timeout (10 minutes), and login/poll request timeout (60 seconds). Configure them with `withConnectTimeout`, `withUploadTimeout`, and `withStatusTimeout`. An upload request limit includes both transmitting the body and waiting for the response. Missing, zero or negative durations use their defaults. Every request is capped by the remaining monotonic solve budget, which defaults to 15 minutes. Independent request/connection expiry is `FAILED` with its HTTP timeout cause; total expiry is `TIMED_OUT`. Cancellation and cleanup keep their existing ownership guarantees. The upload default allows about 120 MB at 2 Mbit/s with response headroom; slower links or larger files may require increasing both upload and total budgets.
+
+An accepted upload without a submission identifier is a protocol failure (`FAILED`), not a rejected sky solution. A remote solver's explicit failure remains `REJECTED`.
+
+### Development API migration
+
+The coordinated checkout intentionally removes these public APIs; no compatibility adapters are retained. Update embedding callers when selecting the next published library version and its SpacePixels dependency together.
+
+| Retired API | Replacement |
+|---|---|
+| `ASTAPInterface.solveImage` (both overloads), `AstrometryDotNet.blindSolve`, `PlateSolveOperation.asFuture` | Start an operation, inspect its typed outcome, cancel through `operation.cancel()`, and await completion for cleanup |
+| `AstrometryDotNet.customSolve`, `startCustomSolve`, public `SubmitFileRequest` and its builder | `startBlindSolve(image, listener)`; custom solving is deferred |
+| `AstrometryDotNetConfig.Builder.withRequestTimeout`, the config getter and `AstrometryDotNet.getRequestTimeout` | Separate connection, upload and status timeouts |
+| `SubmissionProgressResponse` | The client owns submission polling |
+| `SubmitFileBodyPublisher.buildMultipartData` | The existing streaming `getBodyPublisher` |
+
+`PlateSolveResult` metadata is an immutable copy; a null map becomes empty, null keys are ignored, and null values are retained. Actual backend results include `source`; caller-constructed results need not. Absent or blank failure/warning text is null. Callers must omit absent warnings when presenting failures; SpacePixels does this. These are intentional result-contract changes alongside the operation API migration.
 
 ### Offline contract tests
 
 `test` uses a portable Java child process and a loopback HTTP server. It requires no ASTAP installation, account, external service or uploads of observer data. `AstrometryDotNetConfig.Builder.withServiceBaseUri(URI)` selects a private server or loopback fixture; result links use the same root. Live `integrationTest` remains separate and opt-in.
 
-The offline suite checks private defaults, explicit public opt-in, request isolation and credential-free diagnostics with synthetic credentials. It also verifies the live-test FITS-copy helper on multiple HDUs and both real fixtures, preserving image samples and pointing hints without changing the originals.
+The offline suite checks the actual blind multipart JSON, private defaults, explicit public opt-in, immutable configuration, credential-free diagnostics, independent HTTP phase limits, total deadlines, slow streamed uploads and cancellation with synthetic credentials. It also verifies the live-test FITS-copy helper on multiple HDUs and both real fixtures, preserving image samples without changing the originals.
 
-Live tests upload temporary copies with neutral names. Every FITS header has observing-site and observer cards removed; checksum cards are also removed from the rewritten copies. All uploads are private. Tests use the operation API, require M101 and M5 solutions near their known centres, and distinguish an unsolvable fixture (`REJECTED`) from transport failure or timeout. Set the optional `ASTROMETRY_API_KEY` environment variable to use your own account; tests report only whether the login is anonymous or uses a supplied key, never the key or session token. They do not change global logging settings.
+Live tests upload temporary copies with neutral names. Every FITS header has observing-site and observer cards removed; checksum cards are also removed from the rewritten copies. All uploads are private. Tests use the operation API, require M101 and M5 solutions near their known centres, and distinguish an unsolvable fixture (`REJECTED`) from transport failure or timeout. Set the optional `ASTROMETRY_API_KEY` environment variable to use your own account; leaving it absent uses anonymous login. Tests report account mode without credentials and leave global logging untouched. Set `ASTAP_EXECUTABLE` to enable the two real local blind-solve checks; they verify WCS coordinates, source hashes, a pre-existing annotated JPEG and contradictory FITS hints. Local checks are skipped if that executable is not configured. Back up and restore the installed GUI solver's settings around real tests; Java `user.home` does not isolate ASTAP's native settings.
 
 ## 🛠️ Building JPlateSolve from Source
 
