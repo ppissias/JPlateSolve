@@ -22,43 +22,8 @@ A fresh review of the library (about 2,300 lines of main code and 700 of tests),
 
 | ID | Change | Priority | Size |
 |---|---|---|---|
-| [JP-09](#jp-09-remove-dead-code) | Remove dead code | High | Small |
-| [JP-10](#jp-10-one-api-style-the-operation-api) | One API style: the operation API | Medium | Small |
 | [JP-07](#jp-07-a-consistent-result-contract) | A consistent result contract | Medium | Small |
 | [JP-08](#jp-08-offline-contract-tests-and-javadoc-checks) | Offline contract tests and Javadoc checks | Low | Small |
-
-### JP-09. Remove dead code
-
-`SubmissionProgressResponse` is never used: the client reads the submission status through `firstJobId`. `SubmitFileBodyPublisher.buildMultipartData`, the in-memory multipart helper described as a "diagnostic path", has no caller either. Delete both.
-
-**Issue review (2026-10-24; evaluate before implementation).**
-- Repository searches support the lack of internal callers, so this is a reasonable narrow cleanup. Check integration sources and README examples too, and document removal of public types/methods even when no external users are currently known.
-- Keep the streaming upload path and its cancellation coverage. Do not replace the removed diagnostic helper with a new full-file byte array in tests or production; large uploads must remain streamed.
-
-### JP-10. One API style: the operation API
-
-**Problem.** Each backend has two entry styles:
-- the operation API: `ASTAPInterface.startSolve`, `AstrometryDotNet.startBlindSolve` and `startCustomSolve`;
-- thin `Future` adapters over it: `ASTAPInterface.solveImage` (two overloads), `AstrometryDotNet.blindSolve` and `customSolve`.
-
-SpacePixels and the live integration tests use only the operation API. The adapters remain in the README examples and one unit test of `asFuture`. They also behave differently. `asFuture(failuresAsResults)` is called with `false` for ASTAP and `true` for Astrometry.net, so the same `Future.get()` throws on one backend and returns a failed result on the other.
-
-**Maintainer's answer (2026-10-23).** JPlateSolve has no users outside SpacePixels today, but it was made so that others can use it one day.
-
-**Proposal.** Keep only the operation API:
-- Nobody depends on the adapters yet, so now is the cheapest moment to settle on one style.
-- A future user is better served by one cancellable API than by two that fail differently.
-
-Steps:
-1. Remove `asFuture` and the four adapter methods.
-2. Rewrite the README examples around `startSolve`, `startBlindSolve` and `operation.completion()`. They currently start with the adapters.
-
-A blocking call stays one line: `operation.completion().toCompletableFuture().get()`.
-
-**Issue review (2026-10-24; evaluate before implementation).**
-- **The migration must explain outcome handling, not just waiting.** `completion()` resolves normally with an `Outcome` for rejection, failure, timeout and cancellation. A successful `get()` does not mean the image was solved; examples must inspect status/result/cause and keep remote rejection distinct from transport or cleanup failure.
-- Cancellation must go through `operation.cancel()`. The future obtained from the minimal completion view is not the legacy adapter that forwards cancellation to the operation. Show cancel-then-await-cleanup explicitly, including executor/client ownership and shutdown.
-- Move cancellation tests onto the operation API before removing the adapters, retaining assertions that completion follows local process/HTTP cleanup and that cleanup failure is visible. Do not imply that local cancellation cancels the remote Astrometry.net job.
 
 ### JP-07. A consistent result contract
 

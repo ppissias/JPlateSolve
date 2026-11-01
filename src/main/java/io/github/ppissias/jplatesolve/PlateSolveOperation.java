@@ -9,7 +9,6 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
-import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -93,32 +92,6 @@ public final class PlateSolveOperation {
             Outcome outcome = completion.getNow(null);
             return outcome != null ? outcome.status() : worker == null ? Status.QUEUED : Status.RUNNING;
         }
-    }
-
-    /** Legacy Future cancellation requests the stop but may release get() before cleanup; use completion() to join. */
-    public Future<PlateSolveResult> asFuture(boolean failuresAsResults) {
-        CompletableFuture<PlateSolveResult> future = new CompletableFuture<>() {
-            @Override
-            public boolean cancel(boolean mayInterruptIfRunning) {
-                if (!stop(Status.CANCELLED, mayInterruptIfRunning)) return false;
-                return super.cancel(mayInterruptIfRunning);
-            }
-        };
-        completion.thenAccept(outcome -> {
-            switch (outcome.status()) {
-                case SUCCEEDED, REJECTED -> future.complete(outcome.result());
-                case CANCELLED -> future.completeExceptionally(new CancellationException("Plate solve cancelled."));
-                case FAILED, TIMED_OUT -> {
-                    if (failuresAsResults && !(outcome.cause() instanceof Error)) {
-                        future.complete(new PlateSolveResult(false, outcome.cause().getMessage(), null, null));
-                    } else {
-                        future.completeExceptionally(outcome.cause());
-                    }
-                }
-                default -> throw new IllegalStateException("Non-terminal solve outcome.");
-            }
-        });
-        return future;
     }
 
     private boolean stop(Status reason) {

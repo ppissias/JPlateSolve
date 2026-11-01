@@ -67,7 +67,6 @@ public class PlateSolveOperationTest {
         PlateSolveOperation solve = PlateSolveOperation.start(Duration.ofSeconds(5), null, Runnable::run, context -> SOLVED);
         assertFalse(solve.cancel());
         assertSame(SOLVED, solve.completion().toCompletableFuture().get().result());
-        assertSame(SOLVED, solve.asFuture(false).get());
     }
 
     @Test
@@ -115,14 +114,4 @@ public class PlateSolveOperationTest {
         }
     }
 
-    @Test
-    public void cancellingALegacyFutureStillStopsTheOperation() throws Exception {
-        AtomicReference<Runnable> queued = new AtomicReference<>();
-        PlateSolveOperation solve = PlateSolveOperation.start(Duration.ofSeconds(5), null, queued::set, context -> SOLVED);
-        var future = solve.asFuture(false);
-        assertTrue(future.cancel(true));
-        assertTrue(future.isCancelled());
-        assertEquals(PlateSolveOperation.Status.CANCELLED, solve.completion().toCompletableFuture().get().status());
-        queued.get().run();
-    }
 }

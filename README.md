@@ -39,11 +39,12 @@ dependencies {
 ASTAP solving is lightning fast but requires the executable to be present on the local machine.
 
 ```java
+import io.github.ppissias.jplatesolve.PlateSolveOperation;
 import io.github.ppissias.jplatesolve.PlateSolveResult;
 import io.github.ppissias.jplatesolve.astap.ASTAPInterface;
 
 import java.io.File;
-import java.util.concurrent.Future;
+import java.time.Duration;
 
 public class PlateSolverApp {
    public void solveLocally() throws Exception {
@@ -52,18 +53,23 @@ public class PlateSolverApp {
 
       System.out.println("Starting local solve...");
 
-      // This starts ASTAP in the background and returns an already-running Future
-      Future<PlateSolveResult> futureResult = ASTAPInterface.solveImage(astapExe, targetImage);
+      // Starts ASTAP in the background and returns a cancellable PlateSolveOperation
+      PlateSolveOperation operation = ASTAPInterface.startSolve(
+              astapExe, targetImage, Duration.ofMinutes(2),
+              progress -> System.out.println(progress.phase() + ": " + progress.message()));
 
-      // .get() will block until ASTAP finishes parsing the image
-      PlateSolveResult result = futureResult.get();
+      // Await completion (joining process cleanup)
+      PlateSolveOperation.Outcome outcome = operation.completion().toCompletableFuture().get();
 
-      if (result.isSuccess()) {
+      if (outcome.status() == PlateSolveOperation.Status.SUCCEEDED) {
+         PlateSolveResult result = outcome.result();
          System.out.println("Solve Successful!");
          System.out.println("RA: " + result.getSolveInformation().get("ra"));
          System.out.println("DEC: " + result.getSolveInformation().get("dec"));
+      } else if (outcome.status() == PlateSolveOperation.Status.REJECTED) {
+         System.out.println("Solve rejected: " + outcome.result().getFailureReason());
       } else {
-         System.out.println("Solve failed: " + result.getFailureReason());
+         System.out.println("Solve failed (" + outcome.status() + "): " + outcome.cause().getMessage());
       }
    }
 }
@@ -73,11 +79,11 @@ public class PlateSolverApp {
 If the user doesn't have ASTAP, you can securely upload the image to the Astrometry.net cloud for blind solving.
 
 ```java
+import io.github.ppissias.jplatesolve.PlateSolveOperation;
 import io.github.ppissias.jplatesolve.PlateSolveResult;
 import io.github.ppissias.jplatesolve.astrometrydotnet.AstrometryDotNet;
 
 import java.io.File;
-import java.util.concurrent.Future;
 
 public class CloudSolverApp {
    public void solveInCloud() throws Exception {
@@ -88,27 +94,33 @@ public class CloudSolverApp {
 
          System.out.println("Uploading image and awaiting blind solve...");
 
-         // This fires off the upload and polling threads in the background
-         Future<PlateSolveResult> futureResult = cloudSolver.blindSolve(targetImage);
+         // Fires off the upload and polling in the background (private upload by default)
+         PlateSolveOperation operation = cloudSolver.startBlindSolve(
+                 targetImage,
+                 progress -> System.out.println(progress.phase() + ": " + progress.message()));
 
-         // .get() blocks until the remote job finishes (can take a few minutes)
-         PlateSolveResult result = futureResult.get();
+         // Await completion (joining HTTP cleanup)
+         PlateSolveOperation.Outcome outcome = operation.completion().toCompletableFuture().get();
 
-         if (result.isSuccess()) {
+         if (outcome.status() == PlateSolveOperation.Status.SUCCEEDED) {
+            PlateSolveResult result = outcome.result();
             System.out.println("Cloud Solve Successful!");
             System.out.println("Annotated Image URL: " + result.getSolveInformation().get("annotated_image_link"));
             System.out.println("Orientation: " + result.getSolveInformation().get("orientation"));
+         } else if (outcome.status() == PlateSolveOperation.Status.REJECTED) {
+            System.out.println("Cloud solve rejected: " + outcome.result().getFailureReason());
          } else {
-            System.out.println("Cloud solve failed: " + result.getFailureReason());
+            System.out.println("Cloud solve failed (" + outcome.status() + "): " + outcome.cause().getMessage());
          }
       }
    }
 }
 ```
 
-## Cancellation and completion in 1.0.1
+## Operation API and cancellation
 
-For new integrations, use `ASTAPInterface.startSolve(executable, imagePath, budget, listener)`,
+All solves run through the `PlateSolveOperation` API:
+`ASTAPInterface.startSolve(executable, imagePath, budget, listener)`,
 `AstrometryDotNet.startBlindSolve(image, listener)`, or
 `AstrometryDotNet.startCustomSolve(image, parameters, listener)`.
 
@@ -127,8 +139,7 @@ PlateSolveOperation.Outcome outcome = operation.completion().toCompletableFuture
 - ASTAP completion follows confirmed process exit and output-reader shutdown. Both output streams are merged and drained with bounded retained diagnostics. Existing `.ini`, `.wcs` and annotated JPEG sidecars are backed up before launch; unsuccessful runs remove only their generated outputs and restore those backups. Successful runs replace the old sidecars. Same-stem concurrent solves in this JVM are rejected, including `frame.fit` versus `frame.fits`. Do not run another application against the same output stem concurrently.
 - Cloud cancellation interrupts local HTTP work and stops polling. **It does not cancel a remote job already accepted by Astrometry.net.** No remote cancellation guarantee is made.
 - The custom request is snapshotted, so login, FITS preparation and the default private visibility do not mutate the caller's object. Existing numeric-hint defaults are unchanged.
-- Legacy methods remain source-compatible. Cloud preparation failures now arrive asynchronously through the returned future. A legacy future's cancelled `get()` may return before backend cleanup; retain the new operation handle when cleanup-aware cancellation is needed. `cancel(false)` does not interrupt a running worker.
-- Close each cloud client when its session ends. `close()` cancels and joins its operations, shuts down HTTP resources, and joins an owned executor (shared 10-second limit, explicit failure if shutdown cannot be confirmed). Borrowed executors are never shut down; this client's queued operations are still cancelled. Starts after close are rejected.
+- Close each cloud client when its session ends. close() cancels and joins its operations, shuts down HTTP resources, and joins an owned executor (shared 10-second limit, explicit failure if shutdown cannot be confirmed). Borrowed executors are never shut down; this client's queued operations are still cancelled. Starts after close are rejected.
 
 ### Offline contract tests
 

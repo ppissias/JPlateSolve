@@ -49,7 +49,6 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.logging.Logger;
 
 /**
@@ -237,16 +236,6 @@ public class AstrometryDotNet implements AutoCloseable {
             throw new IOException("Astrometry.net login failed: " + reason.replace(apiKey, "<api key>"));
         }
         sessionID = result.getSession();
-    }
-
-    /** Legacy adapter. Login and FITS preparation now execute asynchronously as part of the solve. */
-    public Future<PlateSolveResult> blindSolve(File imageFile) throws IOException, InterruptedException {
-        return startBlindSolve(imageFile, null).asFuture(true);
-    }
-
-    public Future<PlateSolveResult> customSolve(File imageFile, SubmitFileRequest parameters)
-            throws IOException, InterruptedException, FitsException {
-        return startCustomSolve(imageFile, parameters, null).asFuture(true);
     }
 
     /** Starts a blind solve with a private upload; use a custom request to opt into public visibility. */

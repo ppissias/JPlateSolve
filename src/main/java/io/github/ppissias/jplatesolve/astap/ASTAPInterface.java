@@ -26,7 +26,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
@@ -39,15 +38,6 @@ public class ASTAPInterface {
     @FunctionalInterface
     interface ProcessLauncher {
         Process start(File executable, String image) throws IOException;
-    }
-
-    public static Future<PlateSolveResult> solveImage(File executable, String image) {
-        return solveImage(executable, image, ASTAPSolveResultsReader.DEFAULT_RESULT_TIMEOUT);
-    }
-
-    /** Legacy adapter; use startSolve to wait for cleanup after requesting cancellation. */
-    public static Future<PlateSolveResult> solveImage(File executable, String image, Duration timeout) {
-        return startSolve(executable, image, timeout, null).asFuture(false);
     }
 
     public static PlateSolveOperation startSolve(File executable, String image, Duration timeout,
