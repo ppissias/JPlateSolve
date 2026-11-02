@@ -4,13 +4,33 @@
 
 It serves as the plate-solving engine behind [SpacePixels](https://github.com/ppissias/SpacePixels) and is designed to be easily embedded into any Java-based astrophotography tool, observatory control software, or batch processing pipeline.
 
+<!-- root-toc:start -->
+## Contents
+
+- [✨ Key Features](#-key-features)
+- [⚠️ Prerequisites](#%EF%B8%8F-prerequisites)
+  - [Upload privacy](#upload-privacy)
+- [🚀 Quick Start Guide](#-quick-start-guide)
+  - [1. Add to your project](#1-add-to-your-project)
+  - [2. Example A: Local Solving via ASTAP](#2-example-a-local-solving-via-astap)
+  - [3. Example B: Cloud Solving via Astrometry.net](#3-example-b-cloud-solving-via-astrometrynet)
+- [Operation API and cancellation](#operation-api-and-cancellation)
+  - [JP-03. Make online blind-solve requests unambiguous](#jp-03-make-online-blind-solve-requests-unambiguous)
+  - [JP-06. Improve blind-solve reliability and remove unused annotations](#jp-06-improve-blind-solve-reliability-and-remove-unused-annotations)
+  - [Development API migration](#development-api-migration)
+  - [Offline contract tests](#offline-contract-tests)
+- [🛠️ Building JPlateSolve from Source](#%EF%B8%8F-building-jplatesolve-from-source)
+- [📦 Publishing to Maven Central](#-publishing-to-maven-central)
+- [📄 License](#-license)
+<!-- root-toc:end -->
+
 ## ✨ Key Features
 
 JPlateSolve supports two completely different backend engines, allowing you to choose between offline speed and online convenience:
 
 1. **Local Plate Solving (ASTAP):** Interfaces directly with a local installation of the blazing-fast [ASTAP (Astrometric STAcking Program)](https://www.hnsky.org/astap.htm) executable. Perfect for rapid, offline solving.
 2. **Cloud Plate Solving (Astrometry.net):** Blind solving through the [Astrometry.net API](https://astrometry.net/doc/net/api.html), with anonymous or personal-account authentication.
-3. **Blind solving only:** No caller-supplied pointing, search-radius or optical-scale constraints. FITS headers are checked for readability without interpreting their coordinate hints. Custom solving is a [deferred feature](FEATURE-REQUESTS.md).
+3. **Blind solving only:** No caller-supplied pointing, search-radius or optical-scale constraints. FITS headers are checked for readability without interpreting their coordinate hints. Custom solving is outside the current scope; revisiting it requires a new proposal and maintainer decision.
 4. **Asynchronous and Cancellable:** Solve operations expose phase progress and a completion stage that resolves after local cleanup.
 
 ## ⚠️ Prerequisites
@@ -159,7 +179,7 @@ The coordinated checkout intentionally removes these public APIs; no compatibili
 | Retired API | Replacement |
 |---|---|
 | `ASTAPInterface.solveImage` (both overloads), `AstrometryDotNet.blindSolve`, `PlateSolveOperation.asFuture` | Start an operation, inspect its typed outcome, cancel through `operation.cancel()`, and await completion for cleanup |
-| `AstrometryDotNet.customSolve`, `startCustomSolve`, public `SubmitFileRequest` and its builder | `startBlindSolve(image, listener)`; custom solving is deferred |
+| `AstrometryDotNet.customSolve`, `startCustomSolve`, public `SubmitFileRequest` and its builder | `startBlindSolve(image, listener)`; custom solving is outside the current scope |
 | `AstrometryDotNetConfig.Builder.withRequestTimeout`, the config getter and `AstrometryDotNet.getRequestTimeout` | Separate connection, upload and status timeouts |
 | `SubmissionProgressResponse` | The client owns submission polling |
 | `SubmitFileBodyPublisher.buildMultipartData` | The existing streaming `getBodyPublisher` |

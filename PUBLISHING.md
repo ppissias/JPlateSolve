@@ -3,6 +3,15 @@
 This repository uses a repeatable Maven Central workflow that can be reused in
 other Java libraries.
 
+<!-- root-toc:start -->
+## Contents
+
+- [Local configuration](#local-configuration)
+- [Standard commands](#standard-commands)
+- [Release flow](#release-flow)
+- [Reuse in other repos](#reuse-in-other-repos)
+<!-- root-toc:end -->
+
 ## Local configuration
 
 1. Keep the real `gradle.properties` local-only.
