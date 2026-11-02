@@ -6,16 +6,6 @@ Every item is a proposal until the maintainer decides on it. When an item is com
 
 **How to use the issue reviews (2026-10-24).** Before implementing an item, consider and evaluate its review comments against the current code and contracts. Record which comments are accepted, adjusted or rejected, why, and the relevant verification with the change. They are review input, not authorization to implement the proposal or automatic proof of a current bug. This was a static review; no solver processes or live uploads were run. Treat changes to cancellation, cleanup, metadata and failure behaviour as contract decisions, even when the scientific solution is unchanged.
 
-<!-- root-toc:start -->
-## Contents
-
-- [Code review of 2026-10-23](#code-review-of-2026-10-23)
-  - [Recommended changes](#recommended-changes)
-  - [JP-08. Offline contract tests and Javadoc checks](#jp-08-offline-contract-tests-and-javadoc-checks)
-  - [Shared logging review (JT-04)](#shared-logging-review-jt-04)
-- [Removed from the previous plan (2026-10-23)](#removed-from-the-previous-plan-2026-10-23)
-<!-- root-toc:end -->
-
 ## Code review of 2026-10-23
 
 A fresh review of the library (about 2,300 lines of main code and 700 of tests), against the principles in [DEVELOPER.md](DEVELOPER.md#principles).
