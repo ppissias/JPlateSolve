@@ -33,7 +33,7 @@ For this library:
 
 ## Working rules
 
-The shared working rules are in SpacePixels' [DEVELOPER.md](../SpacePixels/DEVELOPER.md#working-rules) and apply here too: discuss a fix first, remove the observing site from anything published, use descriptive code commits and generic documentation commits, don't rewrite history, refer to people as they/them. The two test frames in this repository may keep their `SITELAT`/`SITELONG` cards, but blank them in any copy uploaded to an external service.
+The shared working rules are in SpacePixels' [DEVELOPER.md](../SpacePixels/DEVELOPER.md#working-rules) and apply here too: discuss a fix first, do not commit a manual, documentation, or GitHub image that shows observer coordinates, use descriptive code commits and generic documentation commits, don't rewrite history, refer to people as they/them. The two test frames in this repository may keep their `SITELAT`/`SITELONG` cards, but blank them in any copy uploaded to an external service.
 
 Document every new Java type and method with a concise Javadoc, including ownership, units and contracts.
 
