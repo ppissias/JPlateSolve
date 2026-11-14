@@ -30,7 +30,7 @@ JPlateSolve supports two completely different backend engines, allowing you to c
 
 1. **Local Plate Solving (ASTAP):** Interfaces directly with a local installation of the blazing-fast [ASTAP (Astrometric STAcking Program)](https://www.hnsky.org/astap.htm) executable. Perfect for rapid, offline solving.
 2. **Cloud Plate Solving (Astrometry.net):** Blind solving through the [Astrometry.net API](https://astrometry.net/doc/net/api.html), with anonymous or personal-account authentication.
-3. **Blind solving only:** No caller-supplied pointing, search-radius or optical-scale constraints. FITS headers are checked for readability without interpreting their coordinate hints. Custom solving is outside the current scope; revisiting it requires a new proposal and maintainer decision.
+3. **Optional solving hints:** Immutable `SolveHints` can constrain a new solve by approximate sky position, search radius and scale. Existing blind entry points remain unrestricted; FITS headers are checked for readability without automatically interpreting their coordinate hints.
 4. **Asynchronous and Cancellable:** Solve operations expose phase progress and a completion stage that resolves after local cleanup.
 
 ## ⚠️ Prerequisites
@@ -162,7 +162,9 @@ PlateSolveOperation.Outcome outcome = operation.completion().toCompletableFuture
 
 ### JP-03. Make online blind-solve requests unambiguous
 
-Both JPlateSolve and SpacePixels use blind solving. The HTTP request sends no `center_ra`, `center_dec`, `radius`, scale bounds, downsample override or `positional_error`. The service chooses its own defaults for omitted fields. JPlateSolve never parses sexagesimal pointing or derives an optical scale; changing or corrupting those header hints cannot change its API constraints. A FITS primary header that cannot be read still fails locally before upload with a descriptive `FitsException`. The caller retains ownership of the original image and its metadata; remove sensitive metadata from a copy before uploading it.
+`startBlindSolve` sends no position or scale constraints. Callers with independent preparation hints can instead use `startSolve(image, hints, listener)`: RA/Dec and radius are degrees, scale is arcseconds per pixel, and the upload supplies scale bounds from half to twice the estimate. JPlateSolve never parses sexagesimal pointing or derives an optical scale from FITS headers. A FITS primary header that cannot be read still fails locally before upload with a descriptive `FitsException`. The caller retains ownership of the original image and its metadata; remove sensitive metadata from a copy before uploading it.
+
+For local hints use `ASTAPInterface.startSolve(executable, image, timeout, listener, hints)`. `new SolveHints(raDegrees, decDegrees, radiusDegrees, arcsecPerPixel, imageHeightDegrees)` validates finite coordinates and positive scales. ASTAP receives RA in hours, south-pole distance in degrees and the supplied image height. A null hint preserves the blind command. Both paths retain their existing cancellation, deadline, cleanup and private-upload contracts. These are additive APIs; the old blind entry points are unchanged.
 
 ### JP-06. Improve blind-solve reliability and remove unused annotations
 
@@ -179,7 +181,7 @@ The coordinated checkout intentionally removes these public APIs; no compatibili
 | Retired API | Replacement |
 |---|---|
 | `ASTAPInterface.solveImage` (both overloads), `AstrometryDotNet.blindSolve`, `PlateSolveOperation.asFuture` | Start an operation, inspect its typed outcome, cancel through `operation.cancel()`, and await completion for cleanup |
-| `AstrometryDotNet.customSolve`, `startCustomSolve`, public `SubmitFileRequest` and its builder | `startBlindSolve(image, listener)`; custom solving is outside the current scope |
+| `AstrometryDotNet.customSolve`, `startCustomSolve`, public `SubmitFileRequest` and its builder | `startBlindSolve(image, listener)`, or the additive typed `startSolve(image, hints, listener)` for approximate preparation hints; the former request builder remains removed |
 | `AstrometryDotNetConfig.Builder.withRequestTimeout`, the config getter and `AstrometryDotNet.getRequestTimeout` | Separate connection, upload and status timeouts |
 | `SubmissionProgressResponse` | The client owns submission polling |
 | `SubmitFileBodyPublisher.buildMultipartData` | The existing streaming `getBodyPublisher` |

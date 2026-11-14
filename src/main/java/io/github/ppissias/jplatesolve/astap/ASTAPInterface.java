@@ -50,6 +50,19 @@ public class ASTAPInterface {
 
     static PlateSolveOperation startSolve(File executable, String image, Duration timeout,
                                           Consumer<PlateSolveOperation.Progress> progress, ProcessLauncher launcher) {
+        return startSolve(executable, image, timeout, progress, null, launcher);
+    }
+
+    /** Starts a fresh constrained solve when hints are supplied; null retains whole-sky automatic-scale behavior. */
+    public static PlateSolveOperation startSolve(File executable, String image, Duration timeout,
+            Consumer<PlateSolveOperation.Progress> progress, io.github.ppissias.jplatesolve.SolveHints hints) {
+        return startSolve(executable, image, timeout, progress, hints, ProcessBuilder::start);
+    }
+
+    /** Uses the same process ownership and deadline for blind and hinted commands. */
+    static PlateSolveOperation startSolve(File executable, String image, Duration timeout,
+            Consumer<PlateSolveOperation.Progress> progress, io.github.ppissias.jplatesolve.SolveHints hints,
+            ProcessLauncher launcher) {
         Duration budget = timeout == null || timeout.isNegative() || timeout.isZero()
                 ? ASTAPSolveResultsReader.DEFAULT_RESULT_TIMEOUT : timeout;
         return PlateSolveOperation.start(budget, progress, action -> {
@@ -72,7 +85,10 @@ public class ASTAPInterface {
             files.prepare();
             context.report(Phase.LAUNCHING, "Starting ASTAP");
             process.process = launcher.start(new ProcessBuilder(executable.getAbsolutePath(), "-f", source.toString(),
-                    "-ra", "0", "-spd", "90", "-r", "180", "-z", "0", "-fov", "0", "-wcs")
+                    "-ra", hints == null ? "0" : Double.toString(hints.raDegrees() / 15),
+                    "-spd", hints == null ? "90" : Double.toString(hints.decDegrees() + 90),
+                    "-r", hints == null ? "180" : Double.toString(hints.radiusDegrees()), "-z", "0",
+                    "-fov", hints == null ? "0" : Double.toString(hints.imageHeightDegrees()), "-wcs")
                     .directory(executable.getAbsoluteFile().getParentFile()).redirectErrorStream(true));
             process.startDrainer();
             context.report(Phase.SOLVING, "ASTAP is solving");

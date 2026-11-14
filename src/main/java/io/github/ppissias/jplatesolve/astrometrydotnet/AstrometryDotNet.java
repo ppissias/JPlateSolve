@@ -251,6 +251,12 @@ public class AstrometryDotNet implements AutoCloseable {
      * Cancellation stops local work, not a remote job already accepted by Astrometry.net.
      */
     public PlateSolveOperation startBlindSolve(File imageFile, Consumer<PlateSolveOperation.Progress> progress) {
+        return startSolve(imageFile, null, progress);
+    }
+
+    /** Starts a fresh solve constrained by optional caller-owned immutable hints; null performs a blind solve. */
+    public PlateSolveOperation startSolve(File imageFile, io.github.ppissias.jplatesolve.SolveHints hints,
+                                         Consumer<PlateSolveOperation.Progress> progress) {
         synchronized (lifecycle) {
             if (closed) throw new IllegalStateException("Astrometry.net client is closed.");
             PlateSolveOperation operation = PlateSolveOperation.start(solveTimeout, progress, executor, context -> {
@@ -268,7 +274,7 @@ public class AstrometryDotNet implements AutoCloseable {
                 context.checkCancelled();
                 if (isFitsFile(imageFile)) validateFitsHeader(imageFile);
                 context.checkCancelled();
-                return performSolve(imageFile, new SubmitFileRequest(sessionID, publiclyVisible ? "y" : "n"), context);
+                return performSolve(imageFile, SubmitFileRequest.create(sessionID, publiclyVisible ? "y" : "n", hints), context);
             });
             operations.add(operation);
             operation.completion().whenComplete((outcome, failure) -> {

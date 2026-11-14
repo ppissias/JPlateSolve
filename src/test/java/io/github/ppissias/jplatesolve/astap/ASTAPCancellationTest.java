@@ -14,6 +14,23 @@ import static org.junit.Assert.*;
 public class ASTAPCancellationTest {
     @Rule public TemporaryFolder folder = new TemporaryFolder();
 
+    /** Production CLI converts degrees to RA hours and south-pole distance without changing process ownership. */
+    @Test public void hintedCommandUsesAstapUnits() throws Exception {
+        Path image = image("hinted.fit");
+        var hints = new io.github.ppissias.jplatesolve.SolveHints(120, -20, 0.5, 1.2, 0.3);
+        var command = new java.util.concurrent.atomic.AtomicReference<java.util.List<String>>();
+        var operation = ASTAPInterface.startSolve(new File("unused"), image.toString(), Duration.ofSeconds(5), null, hints, builder -> {
+            command.set(java.util.List.copyOf(builder.command()));
+            throw new java.io.IOException("Command captured before launch");
+        });
+        operation.completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        var args = command.get();
+        assertEquals("8.0", args.get(args.indexOf("-ra") + 1));
+        assertEquals("70.0", args.get(args.indexOf("-spd") + 1));
+        assertEquals("0.5", args.get(args.indexOf("-r") + 1));
+        assertEquals("0.3", args.get(args.indexOf("-fov") + 1));
+    }
+
     private PlateSolveOperation start(Path image, String mode, Duration budget) throws Exception {
         return start(image, mode, budget, false);
     }

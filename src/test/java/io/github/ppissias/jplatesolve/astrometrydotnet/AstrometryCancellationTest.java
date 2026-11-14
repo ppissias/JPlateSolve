@@ -359,6 +359,25 @@ public class AstrometryCancellationTest {
         }
     }
 
+    /** Caller hints reach the actual upload with degree coordinates and an arcsec/pixel interval. */
+    @Test public void hintedSolveSendsPositionAndScale() throws Exception {
+        try (AstrometryDotNet client = client(Duration.ofSeconds(5), null)) {
+            var hints = new io.github.ppissias.jplatesolve.SolveHints(120, -20, 0.5, 1.2, 0.3);
+            var outcome = client.startSolve(image(), hints, null).completion().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertEquals(String.valueOf(outcome.cause()), PlateSolveOperation.Status.SUCCEEDED, outcome.status());
+            int begin = uploadJson.indexOf('{');
+            int end = uploadJson.indexOf('}', begin) + 1;
+            var json = com.google.gson.JsonParser.parseString(uploadJson.substring(begin, end)).getAsJsonObject();
+            assertEquals(120, json.get("center_ra").getAsDouble(), 0);
+            assertEquals(-20, json.get("center_dec").getAsDouble(), 0);
+            assertEquals(0.5, json.get("radius").getAsDouble(), 0);
+            assertEquals("arcsecperpix", json.get("scale_units").getAsString());
+            assertEquals(0.6, json.get("scale_lower").getAsDouble(), 0);
+            assertEquals(2.4, json.get("scale_upper").getAsDouble(), 0);
+            assertEquals("n", json.get("publicly_visible").getAsString());
+        }
+    }
+
     /** Checks the actual multipart JSON rather than the DTO serializer in isolation. */
     private void assertBlindParameters() {
         int begin = uploadJson.indexOf('{');
