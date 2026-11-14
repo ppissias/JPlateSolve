@@ -15,13 +15,7 @@ Machine-specific paths (tools, test data, scratch folders) are in a git-ignored 
 
 ## Principles
 
-Correct astrometric results, protection of credentials and completion of owned cleanup constrain every design change. Within those constraints, the maintainer's goals for the code, in order:
-
-1. **Readable code.** A reader should understand a class from its name, its Javadoc and its fields.
-2. **A clear design with clear boundaries.** Each piece of mutable state has one authoritative owner, and dependencies point one way. Caller-owned requests, detached operation snapshots and returned results have distinct lifetimes.
-3. **No abstraction or engineering without a real need.** An interface normally needs two implementations or a test seam that is actually used; an explicit callback or ownership boundary can also justify one. A layer needs a responsibility of its own. A compatibility path needs a caller that still uses it. Remove unused machinery after identifying the contracts it protects. Fewer classes or files alone do not make a design simpler.
-4. **A few chosen design patterns, applied consistently.** Reuse them when their responsibilities fit; consistency does not justify an unnecessary abstraction.
-5. **One implementation of each behaviour.** Code that must give the same result is written once and called from every place that needs it. A second implementation is acceptable when it has a reason of its own, such as bounded memory, speed or a different measurement. It then gives that reason in its Javadoc, and a test pins the two together where they must agree. Prefer a parameter or a small shared step to a copy; sharing is a real need in the sense of principle 3, but share the step, not a framework.
+Correct astrometric results, protection of credentials and completion of owned cleanup constrain every design change. Within those constraints, the maintainer's goals for the code are the same in all three repositories and are stated once, in SpacePixels' [DEVELOPER.md](../SpacePixels/DEVELOPER.md#principles): readable code, a clear design with clear boundaries, no abstraction without a real need, a few design patterns applied consistently, and one implementation of each behaviour. Here, clear boundaries also mean that caller-owned requests, detached operation snapshots and returned results have distinct lifetimes.
 
 For this library:
 
