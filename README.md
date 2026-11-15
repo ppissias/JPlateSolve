@@ -51,7 +51,7 @@ Private visibility does not remove metadata from the file. The anonymous login u
 If you are using Gradle, include JPlateSolve in your dependencies:
 ```groovy
 dependencies {
-   implementation 'io.github.ppissias.jplatesolve:jplatesolve:1.0.2'
+   implementation 'io.github.ppissias.jplatesolve:jplatesolve:1.0.3'
 }
 ```
 
