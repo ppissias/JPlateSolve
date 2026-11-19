@@ -36,7 +36,7 @@ Consider and evaluate each issue's review comments before implementation, checki
 
 ## Build and test
 
-Use Java 21 and the Gradle wrapper.
+Use JDK 21 or newer (compiling with `--release 21`) and the Gradle wrapper.
 
 ```powershell
 .\gradlew.bat test              # offline: a Java child process and a loopback HTTP server; no ASTAP, account or upload
